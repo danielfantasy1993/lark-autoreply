@@ -48,6 +48,7 @@ export type UserTokenFile = {
 
 export class LarkUserClient {
   private token?: UserTokenFile;
+  private refreshPromise?: Promise<string>;
 
   constructor(
     private readonly appId: string,
@@ -98,7 +99,10 @@ export class LarkUserClient {
       return token.access_token;
     }
 
-    return this.refreshAccessToken(token);
+    this.refreshPromise ??= this.refreshAccessToken(token).finally(() => {
+      this.refreshPromise = undefined;
+    });
+    return this.refreshPromise;
   }
 
   private async readToken(): Promise<UserTokenFile> {
