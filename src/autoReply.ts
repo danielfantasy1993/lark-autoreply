@@ -612,7 +612,14 @@ async function replyTextMessage(client: LarkUserClient, sourceMessageId: string,
   });
 }
 
-async function sendBotTextMessage(client: LarkClient, openId: string, text: string, sourceMessageId: string, replyIndex: number): Promise<void> {
+async function sendBotTextMessage(
+  client: LarkClient,
+  receiveId: string,
+  receiveIdType: "open_id" | "chat_id",
+  text: string,
+  sourceMessageId: string,
+  replyIndex: number
+): Promise<void> {
   const uuid = `bot-ar-${shortHash(`${sourceMessageId}:${replyIndex}`)}`;
   if (replyToSourceMessageEnabled) {
     try {
@@ -626,9 +633,9 @@ async function sendBotTextMessage(client: LarkClient, openId: string, text: stri
   await client.request({
     method: "POST",
     path: "/open-apis/im/v1/messages",
-    query: { receive_id_type: "open_id" },
+    query: { receive_id_type: receiveIdType },
     body: {
-      receive_id: openId,
+      receive_id: receiveId,
       msg_type: "text",
       content: JSON.stringify({ text }),
       uuid
@@ -650,9 +657,11 @@ async function replyBotTextMessage(client: LarkClient, sourceMessageId: string, 
 
 async function sendAutoReply(client: LarkUserClient, botClient: LarkClient, target: ResolvedTarget, texts: string[], sourceMessageId: string, replyIndexOffset = 0): Promise<"user" | "bot"> {
   const markedTexts = texts.map(formatAutoReplyText);
+  const botReceiveId = isChatTarget(target) ? target.chatId : target.openId;
+  const botReceiveIdType = isChatTarget(target) ? "chat_id" : "open_id";
   if (target.isExternal) {
     for (const [index, text] of markedTexts.entries()) {
-      await sendBotTextMessage(botClient, target.openId, text, sourceMessageId, index + replyIndexOffset);
+      await sendBotTextMessage(botClient, botReceiveId, botReceiveIdType, text, sourceMessageId, index + replyIndexOffset);
     }
     return "bot";
   }
@@ -667,7 +676,7 @@ async function sendAutoReply(client: LarkUserClient, botClient: LarkClient, targ
       throw error;
     }
     for (const [index, text] of markedTexts.entries()) {
-      await sendBotTextMessage(botClient, target.openId, text, sourceMessageId, index + replyIndexOffset);
+      await sendBotTextMessage(botClient, botReceiveId, botReceiveIdType, text, sourceMessageId, index + replyIndexOffset);
     }
     return "bot";
   }
