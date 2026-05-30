@@ -113,6 +113,7 @@ const keywords = readKnowledgeKeywords();
 const syncDays = readPositiveNumber(process.env.LARK_KNOWLEDGE_SYNC_DAYS, 30);
 const maxChats = readPositiveInteger(process.env.LARK_KNOWLEDGE_MAX_CHATS, 120);
 const maxMessagesPerChat = readPositiveInteger(process.env.LARK_KNOWLEDGE_MAX_MESSAGES_PER_CHAT, 50);
+const syncRateLimitBackoffMs = readPositiveInteger(process.env.LARK_KNOWLEDGE_SYNC_RATE_LIMIT_BACKOFF_MS, 3_000);
 const includeAllMonitoredChats = process.env.LARK_KNOWLEDGE_SYNC_MONITORED_CHATS !== "false";
 const syncAllChatMessages = process.env.LARK_KNOWLEDGE_SYNC_ALL_CHAT_MESSAGES !== "false";
 const syncCloudSearch = process.env.LARK_KNOWLEDGE_SEARCH_CLOUD_DOCS !== "false";
@@ -399,6 +400,9 @@ async function syncMonitoredChatItems(client: LarkUserClient): Promise<Knowledge
       }
     } catch (error) {
       console.warn(`Could not sync chat ${key}: ${error instanceof Error ? error.message : String(error)}`);
+      if (isRateLimitError(error)) {
+        await delay(syncRateLimitBackoffMs);
+      }
     }
     await delay(readPositiveInteger(process.env.LARK_KNOWLEDGE_SYNC_DELAY_MS, 120));
   }
@@ -546,6 +550,11 @@ function buildCloudSearchTerms(): string[] {
 function isDelegatedAutoReplyText(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.endsWith("ᵃʳ") || /^AR:/i.test(trimmed) || /自动回复|请留言|我现在不在/.test(trimmed);
+}
+
+function isRateLimitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("99991400") || message.includes("429") || /frequency limit|too many requests/i.test(message);
 }
 
 async function loadState(): Promise<AutoReplyState> {
