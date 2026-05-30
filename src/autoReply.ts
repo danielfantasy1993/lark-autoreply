@@ -90,8 +90,14 @@ type AutoReplyState = {
   lastCheckedAt?: number;
   repliedMessageIds?: string[];
   lastReplyAtByChat?: Record<string, number>;
+  fixedReplyEscalationByChat?: Record<string, FixedReplyEscalationState>;
   pendingWeatherByChat?: Record<string, { requestedAt: number }>;
   targets?: Record<string, TargetState>;
+};
+
+type FixedReplyEscalationState = {
+  level: number;
+  lastAutoReplyAt: number;
 };
 
 type TargetState = {
@@ -315,6 +321,7 @@ async function main(): Promise<void> {
   const state = await loadState();
   state.repliedMessageIds ??= [];
   state.lastReplyAtByChat ??= {};
+  state.fixedReplyEscalationByChat ??= {};
   state.targets ??= migrateLegacyTargetState(state);
   const excludedOpenIds = await resolveExcludedOpenIds(client, state);
   pruneExcludedState(state, excludedOpenIds);
@@ -492,14 +499,24 @@ async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: Au
       continue;
     }
 
+    if (!useSmartReply) {
+      await resetFixedReplyEscalationIfManuallyReplied(client, state, target, selfOpenId, createTime);
+    }
+
     const realtimeRepliedBy = useSmartReply ? await trySendRealtimeWeatherReply(client, botClient, state, target, incomingMessage, messageId) : undefined;
-    const texts = realtimeRepliedBy ? [] : useSmartReply && smartReply ? await buildSmartReplies(client, target, incomingMessage, selfOpenId, endTime, smartReply) : replyTexts;
+    const texts = realtimeRepliedBy ? [] : useSmartReply && smartReply ? await buildSmartReplies(client, target, incomingMessage, selfOpenId, endTime, smartReply) : pickFixedReplyTexts(state, target);
     if (!realtimeRepliedBy && await shouldSkipBecauseSelfReplied(client, target, selfOpenId, messageId, createTime, replyGuardStartedAt)) {
+      if (!useSmartReply) {
+        resetFixedReplyEscalation(state, target.chatId);
+      }
       state.repliedMessageIds = [...(state.repliedMessageIds ?? []), messageId].slice(-200);
       console.log(`Skipped auto reply to ${target.name} message ${messageId} because you replied while the reply was being prepared.`);
       continue;
     }
     const repliedBy = realtimeRepliedBy ?? await sendAutoReply(client, botClient, target, texts, messageId);
+    if (!useSmartReply && !realtimeRepliedBy) {
+      advanceFixedReplyEscalation(state, target.chatId);
+    }
     state.repliedMessageIds = [...(state.repliedMessageIds ?? []), messageId].slice(-200);
     state.lastReplyAtByChat = { ...(state.lastReplyAtByChat ?? {}), [target.chatId]: Date.now() };
     console.log(`Replied to ${target.name} message ${messageId} as ${repliedBy}.`);
@@ -574,6 +591,64 @@ async function shouldSkipBecauseSelfReplied(
     }
   }
   return false;
+}
+
+function pickFixedReplyTexts(state: AutoReplyState, target: ResolvedTarget): string[] {
+  if (replyTexts.length <= 1) {
+    return replyTexts;
+  }
+  const currentLevel = Math.max(0, state.fixedReplyEscalationByChat?.[target.chatId]?.level ?? 0);
+  return [replyTexts[Math.min(currentLevel, replyTexts.length - 1)]];
+}
+
+function advanceFixedReplyEscalation(state: AutoReplyState, chatId: string): void {
+  const currentLevel = Math.max(0, state.fixedReplyEscalationByChat?.[chatId]?.level ?? 0);
+  state.fixedReplyEscalationByChat = {
+    ...(state.fixedReplyEscalationByChat ?? {}),
+    [chatId]: {
+      level: Math.min(currentLevel + 1, Math.max(replyTexts.length - 1, 0)),
+      lastAutoReplyAt: Date.now()
+    }
+  };
+}
+
+function resetFixedReplyEscalation(state: AutoReplyState, chatId: string): void {
+  if (!state.fixedReplyEscalationByChat?.[chatId]) {
+    return;
+  }
+  const nextEscalationByChat = { ...state.fixedReplyEscalationByChat };
+  delete nextEscalationByChat[chatId];
+  state.fixedReplyEscalationByChat = nextEscalationByChat;
+}
+
+async function resetFixedReplyEscalationIfManuallyReplied(
+  client: LarkUserClient,
+  state: AutoReplyState,
+  target: ResolvedTarget,
+  selfOpenId: string | undefined,
+  incomingCreateTime: number
+): Promise<void> {
+  const escalation = state.fixedReplyEscalationByChat?.[target.chatId];
+  if (!escalation || !selfOpenId) {
+    return;
+  }
+
+  const messages = await listMessages(client, target.chatId, Math.max(0, Math.floor(escalation.lastAutoReplyAt / 1000) - 1), incomingCreateTime);
+  for (const message of messages) {
+    const messageCreateTimeMs = readMessageCreateTime(message) * 1000;
+    if (messageCreateTimeMs <= escalation.lastAutoReplyAt || messageCreateTimeMs > incomingCreateTime * 1000) {
+      continue;
+    }
+    if (getSenderOpenId(message) !== selfOpenId) {
+      continue;
+    }
+
+    const text = extractMessageText(message.msg_type, message.content ?? message.body?.content);
+    if (text && !isDelegatedAutoReplyText(text)) {
+      resetFixedReplyEscalation(state, target.chatId);
+      return;
+    }
+  }
 }
 
 async function sendTextMessage(client: LarkUserClient, chatId: string, text: string, sourceMessageId: string, replyIndex: number): Promise<void> {
@@ -1400,6 +1475,7 @@ function pruneExcludedState(state: AutoReplyState, excludedOpenIds: Set<string>)
 
   for (const chatId of removedChatIds) {
     delete state.lastReplyAtByChat?.[chatId];
+    delete state.fixedReplyEscalationByChat?.[chatId];
   }
 }
 
