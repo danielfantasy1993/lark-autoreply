@@ -133,6 +133,9 @@ async function main(): Promise<void> {
   const items: KnowledgeItem[] = [];
 
   items.push(...readManualKnowledgeItems());
+  if (includeAllMonitoredChats) {
+    items.push(...(await syncMonitoredChatItems(client)));
+  }
   if (syncCloudSearch) {
     if (!(await hasAnyRequiredUserScope(cloudSearchRequiredScopes))) {
       console.warn(`Cloud doc search warning: saved user token scope does not list any of ${cloudSearchRequiredScopes.join(", ")}. Trying the API anyway because Feishu may omit some doc scopes from the token metadata.`);
@@ -140,9 +143,6 @@ async function main(): Promise<void> {
     items.push(...(await syncCloudSearchItems(client)));
   }
   items.push(...(await syncDocxItems(client)));
-  if (includeAllMonitoredChats) {
-    items.push(...(await syncMonitoredChatItems(client)));
-  }
   if (syncMail) {
     if (!(await hasAnyRequiredUserScope(mailRequiredScopes))) {
       console.warn(`Mail sync warning: saved user token scope does not list any of ${mailRequiredScopes.join(", ")}. Trying the API anyway; if it fails, add Feishu mail read scopes and run oauth:login again.`);
@@ -401,6 +401,9 @@ async function syncMonitoredChatItems(client: LarkUserClient): Promise<Knowledge
       console.warn(`Could not sync chat ${key}: ${error instanceof Error ? error.message : String(error)}`);
     }
     await delay(readPositiveInteger(process.env.LARK_KNOWLEDGE_SYNC_DELAY_MS, 120));
+  }
+  if (items.length > 0) {
+    console.log(`Chat sync collected ${items.length} item(s) from ${targets.length} monitored chat(s).`);
   }
   return items;
 }
