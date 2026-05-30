@@ -93,7 +93,7 @@ export function createSmartReplyGenerator(): SmartReplyGenerator {
       throw new Error(`Smart reply API returned an empty response: ${responseText}`);
     }
 
-    return stripWrappingQuotes(reply);
+    return sanitizeSmartReply(stripWrappingQuotes(reply), input);
   };
 }
 
@@ -196,6 +196,33 @@ function speakerLabel(speaker: SmartReplyConversationMessage["speaker"], targetN
 
 function stripWrappingQuotes(value: string): string {
   return value.replace(/^[“”"'\s]+|[“”"'\s]+$/g, "").trim();
+}
+
+function sanitizeSmartReply(reply: string, input: SmartReplyInput): string {
+  if (isRealtimeInfoQuestion(input.incomingMessage) && hasUnsupportedFollowUpPromise(reply)) {
+    if (/(天气|下雨|降雨|气温|温度|台风|暴雨|空气质量|aqi)/i.test(input.incomingMessage)) {
+      return "我这边没法直接看实时天气|你说下哪个城市，我按你发的情况帮你判断下";
+    }
+    return "这个我现在没法直接确认|你把具体信息发我，我按现有信息帮你判断下";
+  }
+
+  if (hasUnsupportedFollowUpPromise(reply)) {
+    return reply
+      .replace(/我(去|来)?(查|翻|看|确认|核|问)(一下|下|一眼|一遍)?(天气|资料|文档|表格|状态|进度|日程)?[，,。.!！\s]*(稍等|等我下|一会儿?回你|晚点回你|确认后回你)?/g, "这个我现在没法直接确认")
+      .replace(/(稍等|等我下|一会儿?回你|晚点回你|确认后回你)/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  return reply;
+}
+
+function isRealtimeInfoQuestion(text: string): boolean {
+  return /(天气|下雨|降雨|气温|温度|台风|暴雨|空气质量|aqi|现在|实时|今天|明天|日程|排期|进度|状态|价格|库存)/i.test(text);
+}
+
+function hasUnsupportedFollowUpPromise(text: string): boolean {
+  return /(查一下|查下|翻一下|翻下|看一下|看下|确认一下|确认下|核一下|核下|问一下|问下|稍等|等我下|一会儿?回你|晚点回你|确认后回你)/i.test(text);
 }
 
 function readNumber(value: string | undefined, fallback: number): number {
