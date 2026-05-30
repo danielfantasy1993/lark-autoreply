@@ -1449,7 +1449,11 @@ function shouldRespondToIncomingMessage(message: Message, target: ResolvedTarget
   }
 
   if (isChatTarget(target)) {
-    return isMentioningSelf(message, selfOpenId);
+    const mentionsSelf = isMentioningSelf(message, selfOpenId);
+    if (!mentionsSelf && verboseSkippedTargets) {
+      console.log(`Skipped group message ${message.message_id ?? "unknown"} in ${target.name}; it did not mention the current user.`);
+    }
+    return mentionsSelf;
   }
 
   return senderOpenId === target.openId;
@@ -1464,9 +1468,12 @@ function isMentioningSelf(message: Message, selfOpenId: string | undefined): boo
   if (mentions.some((mention) => getMentionOpenId(mention) === selfOpenId)) {
     return true;
   }
+  if (mentions.length > 0) {
+    return false;
+  }
 
   const contentText = message.content ?? message.body?.content ?? "";
-  return contentText.includes(selfOpenId);
+  return contentText.includes(selfOpenId) || /@_user_\d+/.test(contentText);
 }
 
 function readContentMentions(rawContent: string | undefined): MessageMention[] {
