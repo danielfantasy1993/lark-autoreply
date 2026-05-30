@@ -32,6 +32,8 @@ LARK_AUTOREPLY_TARGETS=department:研发中心,department:产品中心,departmen
 # LARK_AUTOREPLY_TARGETS=department:系统部,person:张三
 # 如果已经知道部门 open_department_id，也可以用：
 # LARK_AUTOREPLY_TARGETS=department_id:od_xxx
+# 群聊可以直接填 chat_id，只有群里有人 @ 你时才触发：
+# LARK_AUTOREPLY_TARGETS=chat:oc_xxx
 # 即使某个人属于已配置部门，也可以用排除名单跳过
 LARK_AUTOREPLY_EXCLUDE_TARGET_NAMES=
 
@@ -60,7 +62,7 @@ LARK_AUTOREPLY_VERBOSE_SKIPPED_TARGETS=false
 # LARK_AUTOREPLY_CHAT_ID=oc_xxx
 ```
 
-`LARK_AUTOREPLY_TARGETS` 支持 `person:姓名`、`external:姓名`、`department:部门名`、`department_id:open_department_id`。脚本会把部门及其子部门递归展开成联系人，再按 `open_id` 去重，所以同一个人同时出现在个人名单和部门里也只会监听一次。`external:姓名` 会优先匹配外部联系人，适合同名内外部联系人并存的情况。`LARK_AUTOREPLY_EXCLUDE_TARGET_NAMES` 会在个人目标和部门展开结果里统一生效。
+`LARK_AUTOREPLY_TARGETS` 支持 `person:姓名`、`external:姓名`、`department:部门名`、`department_id:open_department_id`、`chat:chat_id`。脚本会把部门及其子部门递归展开成联系人，再按 `open_id` 去重，所以同一个人同时出现在个人名单和部门里也只会监听一次。`external:姓名` 会优先匹配外部联系人，适合同名内外部联系人并存的情况。群聊目标只在群里有人 @ 当前账号时触发，避免普通群聊内容刷屏自动回复。`LARK_AUTOREPLY_EXCLUDE_TARGET_NAMES` 会在个人目标和部门展开结果里统一生效。
 
 大部门展开时，建议保持 `LARK_AUTOREPLY_SEARCH_MISSING_DEPARTMENT_CHAT_IDS=false`，只纳入飞书接口直接返回了私聊 `chat_id` 或已经缓存过 `chat_id` 的联系人，避免逐个搜索触发通讯录接口限流。
 

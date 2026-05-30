@@ -56,8 +56,10 @@ type Message = {
   msg_type?: string;
   create_time?: string;
   content?: string;
+  mentions?: MessageMention[];
   body?: {
     content?: string;
+    mentions?: MessageMention[];
   };
   sender?: {
     id?: string;
@@ -69,6 +71,16 @@ type Message = {
       union_id?: string;
     };
   };
+};
+
+type MessageMention = {
+  key?: string;
+  id?: {
+    open_id?: string;
+    user_id?: string;
+    union_id?: string;
+  };
+  name?: string;
 };
 
 type AutoReplyState = {
@@ -85,6 +97,7 @@ type TargetState = {
   chatId?: string;
   openId?: string;
   isExternal?: boolean;
+  targetType?: "person" | "chat";
   lastCheckedAt?: number;
 };
 
@@ -95,6 +108,7 @@ type ResolvedTarget = {
   chatId: string;
   source: string;
   isExternal: boolean;
+  targetType: "person" | "chat";
 };
 
 type TargetSpec =
@@ -115,6 +129,11 @@ type TargetSpec =
     }
   | {
       type: "department_id";
+      value: string;
+      label: string;
+    }
+  | {
+      type: "chat";
       value: string;
       label: string;
     };
@@ -452,7 +471,7 @@ async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: Au
     }
 
     const senderOpenId = getSenderOpenId(message);
-    if (!senderOpenId || senderOpenId === selfOpenId || senderOpenId !== target.openId) {
+    if (!shouldRespondToIncomingMessage(message, target, senderOpenId, selfOpenId)) {
       continue;
     }
 
@@ -1037,15 +1056,15 @@ async function findTargetUser(client: LarkUserClient, name = targetName, preferE
 
 async function resolveTargets(client: LarkUserClient, state: AutoReplyState, excludedOpenIds: Set<string>): Promise<ResolvedTarget[]> {
   const resolvedTargets: ResolvedTarget[] = [];
-  const seenOpenIds = new Set<string>();
+  const seenTargetKeys = new Set<string>();
   const now = Math.floor(Date.now() / 1000);
   for (const spec of targetSpecs) {
     const specTargets = await resolveTargetSpec(client, state, spec, now, excludedOpenIds);
     for (const target of specTargets) {
-      if (seenOpenIds.has(target.openId)) {
+      if (seenTargetKeys.has(target.key)) {
         continue;
       }
-      seenOpenIds.add(target.openId);
+      seenTargetKeys.add(target.key);
       resolvedTargets.push(target);
     }
   }
@@ -1053,6 +1072,10 @@ async function resolveTargets(client: LarkUserClient, state: AutoReplyState, exc
 }
 
 async function resolveTargetSpec(client: LarkUserClient, state: AutoReplyState, spec: TargetSpec, now: number, excludedOpenIds: Set<string>): Promise<ResolvedTarget[]> {
+  if (spec.type === "chat") {
+    return [resolveChatTarget(state, spec, now)];
+  }
+
   if (spec.type === "person" || spec.type === "external_person") {
     if (isExcludedName(spec.value)) {
       return [];
@@ -1134,6 +1157,13 @@ async function resolveUserItemTarget(client: LarkUserClient, state: AutoReplySta
   return persistResolvedTarget(state, targetKey, name, openId, chatId, isExternal, spec.label, existing, now);
 }
 
+function resolveChatTarget(state: AutoReplyState, spec: Extract<TargetSpec, { type: "chat" }>, now: number): ResolvedTarget {
+  const chatId = spec.value;
+  const targetKey = chatTargetKey(chatId);
+  const existing = findExistingTargetState(state, [targetKey, spec.label]);
+  return persistResolvedTarget(state, targetKey, `群聊 ${chatId}`, chatId, chatId, false, spec.label, existing, now, "chat");
+}
+
 function persistResolvedTarget(
   state: AutoReplyState,
   key: string,
@@ -1143,25 +1173,27 @@ function persistResolvedTarget(
   isExternal: boolean,
   source: string,
   existing: TargetState | undefined,
-  now: number
+  now: number,
+  targetType: "person" | "chat" = "person"
 ): ResolvedTarget {
   const targetState = {
     openId,
     chatId,
     isExternal,
+    targetType,
     lastCheckedAt: existing?.lastCheckedAt ?? (replyExisting ? now - lookbackSeconds : now)
   };
   const targets = {
     ...(state.targets ?? {}),
     [key]: targetState
   };
-  if (source.startsWith("person:") || source.startsWith("external:")) {
+  if (source.startsWith("person:") || source.startsWith("external:") || source.startsWith("chat:")) {
     targets[source] = targetState;
   }
   state.targets = {
     ...targets
   };
-  return { key, name, openId, chatId, source, isExternal };
+  return { key, name, openId, chatId, source, isExternal, targetType };
 }
 
 async function findDepartmentId(client: LarkUserClient, name: string): Promise<string | undefined> {
@@ -1364,6 +1396,10 @@ function userTargetKey(openId: string): string {
   return `user:${openId}`;
 }
 
+function chatTargetKey(chatId: string): string {
+  return `chat:${chatId}`;
+}
+
 function migrateLegacyTargetState(state: AutoReplyState): Record<string, TargetState> {
   if (!state.chatId && !state.targetOpenId && !state.lastCheckedAt) {
     return {};
@@ -1403,6 +1439,41 @@ function readMessageCreateTime(message: Message): number {
 
 function getSenderOpenId(message: Message): string | undefined {
   return message.sender?.sender_id?.open_id ?? (message.sender?.id_type === "open_id" ? message.sender.id : undefined);
+}
+
+function shouldRespondToIncomingMessage(message: Message, target: ResolvedTarget, senderOpenId: string | undefined, selfOpenId: string | undefined): boolean {
+  if (!senderOpenId || senderOpenId === selfOpenId) {
+    return false;
+  }
+
+  if (target.targetType === "chat") {
+    return isMentioningSelf(message, selfOpenId);
+  }
+
+  return senderOpenId === target.openId;
+}
+
+function isMentioningSelf(message: Message, selfOpenId: string | undefined): boolean {
+  if (!selfOpenId) {
+    return false;
+  }
+
+  const mentions = [...(message.mentions ?? []), ...(message.body?.mentions ?? []), ...readContentMentions(message.content ?? message.body?.content)];
+  if (mentions.some((mention) => mention.id?.open_id === selfOpenId)) {
+    return true;
+  }
+
+  const contentText = message.content ?? message.body?.content ?? "";
+  return contentText.includes(selfOpenId);
+}
+
+function readContentMentions(rawContent: string | undefined): MessageMention[] {
+  const content = parseJson(rawContent ?? "") as Record<string, unknown>;
+  return Array.isArray(content.mentions) ? content.mentions.filter(isMessageMention) : [];
+}
+
+function isMessageMention(value: unknown): value is MessageMention {
+  return Boolean(value && typeof value === "object");
 }
 
 function resolvePath(path: string): string {
@@ -1563,6 +1634,9 @@ function matchesSmartReplySelector(target: ResolvedTarget, selector: string): bo
     if (isExternalPersonType(type)) {
       return target.source === `external:${value}`;
     }
+    if (isChatTargetType(type)) {
+      return target.source === `chat:${value}`;
+    }
     return target.source === `person:${value}`;
   }
   return target.name.trim() === trimmed || target.source === `person:${trimmed}`;
@@ -1581,6 +1655,9 @@ function formatReplyModeLog(smartTargets: ResolvedTarget[]): string {
 }
 
 function formatTargetLabel(target: ResolvedTarget): string {
+  if (target.targetType === "chat") {
+    return target.name;
+  }
   return target.isExternal ? `${target.name} (external)` : target.name;
 }
 
@@ -1634,6 +1711,9 @@ function parseTargetSpec(raw: string): TargetSpec {
   if (["department_id", "dept_id", "open_department_id", "部门id"].includes(type)) {
     return { type: "department_id", value, label: `department_id:${value}` };
   }
+  if (isChatTargetType(type)) {
+    return { type: "chat", value, label: `chat:${value}` };
+  }
   if (isExternalPersonType(type)) {
     return { type: "external_person", value, label: `external:${value}` };
   }
@@ -1642,6 +1722,10 @@ function parseTargetSpec(raw: string): TargetSpec {
 
 function isExternalPersonType(type: string): boolean {
   return ["external", "external_person", "external_user", "外部", "外部联系人"].includes(type);
+}
+
+function isChatTargetType(type: string): boolean {
+  return ["chat", "chat_id", "group", "group_chat", "群", "群聊"].includes(type);
 }
 
 function dedupeTargetSpecs(specs: TargetSpec[]): TargetSpec[] {
