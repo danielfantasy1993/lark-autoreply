@@ -511,6 +511,7 @@ async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: Au
       chatId: target.chatId,
       openId: target.openId,
       isExternal: target.isExternal,
+      targetType: target.targetType,
       lastCheckedAt: Math.max(newestCreateTime, endTime - 1)
     }
   };
