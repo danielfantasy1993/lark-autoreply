@@ -75,11 +75,12 @@ type Message = {
 
 type MessageMention = {
   key?: string;
-  id?: {
+  id?: string | {
     open_id?: string;
     user_id?: string;
     union_id?: string;
   };
+  id_type?: string;
   name?: string;
 };
 
@@ -1459,7 +1460,7 @@ function isMentioningSelf(message: Message, selfOpenId: string | undefined): boo
   }
 
   const mentions = [...(message.mentions ?? []), ...(message.body?.mentions ?? []), ...readContentMentions(message.content ?? message.body?.content)];
-  if (mentions.some((mention) => mention.id?.open_id === selfOpenId)) {
+  if (mentions.some((mention) => getMentionOpenId(mention) === selfOpenId)) {
     return true;
   }
 
@@ -1474,6 +1475,13 @@ function readContentMentions(rawContent: string | undefined): MessageMention[] {
 
 function isMessageMention(value: unknown): value is MessageMention {
   return Boolean(value && typeof value === "object");
+}
+
+function getMentionOpenId(mention: MessageMention): string | undefined {
+  if (typeof mention.id === "string") {
+    return mention.id_type === "open_id" ? mention.id : undefined;
+  }
+  return mention.id?.open_id;
 }
 
 function resolvePath(path: string): string {
