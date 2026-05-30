@@ -43,6 +43,8 @@ const defaultStyleGuide = [
   "对方只是短确认时，优先回 get、nice、太行、可以、行 这类很短的真人话；不要凭空安排下一步。",
   "只有对方消息本身是纯确认词时才回 nice/get/行；像“有绩效”“规模可以更大”“看他是不是符合预期”这类是在补信息或继续讨论，要承接上下文。",
   "如果上下文已经在聊 DK057 和 DK075，对方说“分别说说吧”“都说说”“两个都说”，不要再问是哪个项目，直接按 DK057、DK075 分开概括。",
+  "如果上下文已经在聊 DK057，对方只发 57、检卡、LPCD 这类短词，要沿着 DK057/NFCR 继续答，不要反复问“哪个点/哪个模块”。",
+  "最新消息不是天气时，绝对不要回复天气；即使历史上下文里出现过天气，也要以最新消息为准。",
   "不要每次都用收到、好的、了解、明白、我看下开头；除非上下文确实需要。",
   "不要机械复述对方问题，不要写总结腔，不要用首先/其次/感谢你的反馈/我理解了。",
   "少用“从...角度来说”“具体方法”“校验方法”“整理流程发你”等客服式表达，除非上下文里用户本人已经这么说。",
@@ -60,6 +62,7 @@ const selfReviewStyleGuard = [
   "只有对方只发 可以、好、ok、嗯、收到、行、1 这类纯确认时，回复才极短，例如“nice”、“get”、“太行”、“行”、“可以”；不要说“我整理下流程发你”“我确认下”“我记录下”。",
   "对方在补事实或表达观点时，不要当成短确认处理。比如“有绩效”“规模可以更大”“看他是不是符合预期”都要接着上下文问关键点或给判断。",
   "对方要求分别说明上下文里的两个对象时，按两个对象分别答；特别是 DK057/DK075 场景，不要继续追问“你具体想聊哪个”。",
+  "DK057 短上下文里，57=DK057，检卡/LPCD=NFCR 低功耗检卡和轮询相关内容，直接接着说。",
   "技术讨论里更像用户本人的是直接追关键点、带一点质疑或口语化，不要泛泛总结对方观点。",
   "少用“从...角度来说”“具体方法”“校验方法”“整理流程发你”等客服式表达，除非上下文里用户本人已经这么说。"
 ].join("\n");
@@ -235,10 +238,7 @@ function sanitizeSmartReply(reply: string, input: SmartReplyInput): string {
   const cleanedReply = cleanupRoboticPhrasing(reply);
 
   if (!isWeatherIntent(input.incomingMessage) && mentionsWeather(cleanedReply)) {
-    const deterministicReply = buildDeterministicReply(input);
-    if (deterministicReply) {
-      return deterministicReply;
-    }
+    return buildDeterministicReply(input) ?? buildProjectContextCorrection(input) ?? "刚才跑偏了，这里不是天气。";
   }
 
   if (isShortAcknowledgement(input.incomingMessage) && inventsFollowUpWork(cleanedReply)) {
@@ -307,10 +307,43 @@ function hasUnsupportedFollowUpPromise(text: string): boolean {
 }
 
 function buildDeterministicReply(input: SmartReplyInput): string | undefined {
+  const dk057Reply = buildDk057FollowUpReply(input);
+  if (dk057Reply) {
+    return dk057Reply;
+  }
+
   if (!isDkProjectSplitRequest(input)) {
     return undefined;
   }
   return "DK057 偏 Ford CE1 NFCR/数字钥匙 SDD，主要是 NFC reader 底层需求和 sleep/wake 这些。|DK075 是赛力斯 L97 数字钥匙，最近更多是 TR2/TR3/PDCP 复盘、问题闭环和需求追溯。";
+}
+
+function buildDk057FollowUpReply(input: SmartReplyInput): string | undefined {
+  if (!isDk057Context(input)) {
+    return undefined;
+  }
+
+  const incoming = normalizeForIntent(input.incomingMessage);
+  if (/^(57|dk057)$/.test(incoming)) {
+    return "DK057 就是 Ford CE1 NFCR/数字钥匙那个。";
+  }
+  if (/(检卡|lpcd|低功耗)/i.test(incoming)) {
+    return "检卡这块主要就是 LPCD/轮询模式：NORMAL 时 antenna polling 切到 LPCD，卡检测距离要求不小于 35mm。";
+  }
+  if (/(你是不是傻子|傻子|\.\.\.\.|……)/.test(incoming) && hasRecentAutoWeatherReply(input)) {
+    return "刚才跑偏了，别管天气，前面是在聊 DK057 的 LPCD/检卡。";
+  }
+  return undefined;
+}
+
+function buildProjectContextCorrection(input: SmartReplyInput): string | undefined {
+  if (isDk057Context(input)) {
+    return "刚才跑偏了，前面是在聊 DK057 的检卡/LPCD。";
+  }
+  if (isDk075Context(input)) {
+    return "刚才跑偏了，前面是在聊 DK075 项目。";
+  }
+  return undefined;
 }
 
 function isDkProjectSplitRequest(input: SmartReplyInput): boolean {
@@ -318,8 +351,20 @@ function isDkProjectSplitRequest(input: SmartReplyInput): boolean {
   if (!/(分别说说|都说说|两个都说|都讲讲|分别讲讲)/.test(compactIncoming)) {
     return false;
   }
-  const contextText = [input.incomingMessage, ...input.conversation.map((message) => message.text), ...(input.knowledge ?? []).map((item) => `${item.title}\n${item.content}`)].join("\n");
+  const contextText = contextCorpus(input);
   return /DK057/i.test(contextText) && /DK075/i.test(contextText);
+}
+
+function isDk057Context(input: SmartReplyInput): boolean {
+  return /DK057/i.test(contextCorpus(input));
+}
+
+function isDk075Context(input: SmartReplyInput): boolean {
+  return /DK075/i.test(contextCorpus(input));
+}
+
+function hasRecentAutoWeatherReply(input: SmartReplyInput): boolean {
+  return input.conversation.slice(-6).some((message) => message.speaker === "me" && mentionsWeather(message.text));
 }
 
 function mentionsWeather(text: string): boolean {
@@ -328,6 +373,14 @@ function mentionsWeather(text: string): boolean {
 
 function isWeatherIntent(text: string): boolean {
   return /(天气|下雨|降雨|气温|温度|台风|暴雨|空气质量|aqi)/i.test(text);
+}
+
+function contextCorpus(input: SmartReplyInput): string {
+  return [input.incomingMessage, ...input.conversation.map((message) => message.text), ...(input.knowledge ?? []).map((item) => `${item.title}\n${item.content}`)].join("\n");
+}
+
+function normalizeForIntent(text: string): string {
+  return text.replace(/[\s，,。.!！?？]/g, "").toLowerCase();
 }
 
 function readNumber(value: string | undefined, fallback: number): number {
