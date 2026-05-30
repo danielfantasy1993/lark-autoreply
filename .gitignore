@@ -6,6 +6,7 @@ dist/
 .lark-user-token.json
 .lark-auto-reply-state.json
 .knowledge/
+.training/
 logs/
 .tools/
 *.log
