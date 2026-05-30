@@ -68,6 +68,8 @@ LARK_AUTOREPLY_VERBOSE_SKIPPED_TARGETS=false
 
 自动回复只会响应明确识别为目标联系人发给你的消息；你发给对方的消息、机器人自己发出的消息、以及接口没有返回发送人 `open_id` 的消息都会跳过。目标联系人发来的文字、表情、链接、图片等任意消息类型都会触发回复。固定文案模式会按 `LARK_AUTOREPLY_TEXTS` 顺序连续发送多条回复；多条文本用 `|` 分隔，如果没有配置 `LARK_AUTOREPLY_TEXTS`，旧的 `LARK_AUTOREPLY_TEXT` 仍兼容。
 
+所有自动发送的固定回复、AI 回复和工具跟进回复都会默认加上 `AR:` 前缀，用来和用户真人回复区分。这个前缀也会被智能上下文和风格学习脚本识别并跳过，避免把自动回复当成真人样本学习。如果确实要改前缀，可以设置 `LARK_AUTOREPLY_PREFIX`。
+
 05 工程里的智能回复功能已经合并到同一个 04 进程里。默认 `LARK_AUTOREPLY_MODE=mixed`：`LARK_SMART_REPLY_TARGET_NAMES` 里的联系人走 AI 智能回复，其他被监听目标继续走固定文案。配置 OpenAI 兼容的 Chat Completions 接口后即可启用智能联系人回复：
 
 ```text

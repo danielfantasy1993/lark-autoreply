@@ -168,6 +168,7 @@ const smartReplyTargetNames = readNameList(process.env.LARK_SMART_REPLY_TARGET_N
 const excludedTargetNames = readNameList(process.env.LARK_AUTOREPLY_EXCLUDE_TARGET_NAMES, []);
 const replyMode = readReplyMode();
 const replyTexts = readReplyTexts();
+const autoReplyPrefix = process.env.LARK_AUTOREPLY_PREFIX ?? "AR:";
 const fixedReplySuppressWindowsEnabled = process.env.LARK_AUTOREPLY_FIXED_REPLY_SUPPRESS_WINDOWS_ENABLED === "true";
 const fixedReplySuppressWindows = readFixedReplySuppressWindows();
 const knownWeatherLocations = [
@@ -524,15 +525,16 @@ async function sendBotTextMessage(client: LarkClient, openId: string, text: stri
 }
 
 async function sendAutoReply(client: LarkUserClient, botClient: LarkClient, target: ResolvedTarget, texts: string[], sourceMessageId: string, replyIndexOffset = 0): Promise<"user" | "bot"> {
+  const prefixedTexts = texts.map(formatAutoReplyText);
   if (target.isExternal) {
-    for (const [index, text] of texts.entries()) {
+    for (const [index, text] of prefixedTexts.entries()) {
       await sendBotTextMessage(botClient, target.openId, text, sourceMessageId, index + replyIndexOffset);
     }
     return "bot";
   }
 
   try {
-    for (const [index, text] of texts.entries()) {
+    for (const [index, text] of prefixedTexts.entries()) {
       await sendTextMessage(client, target.chatId, text, sourceMessageId, index + replyIndexOffset);
     }
     return "user";
@@ -540,11 +542,19 @@ async function sendAutoReply(client: LarkUserClient, botClient: LarkClient, targ
     if (!isExternalChatPermissionError(error)) {
       throw error;
     }
-    for (const [index, text] of texts.entries()) {
+    for (const [index, text] of prefixedTexts.entries()) {
       await sendBotTextMessage(botClient, target.openId, text, sourceMessageId, index + replyIndexOffset);
     }
     return "bot";
   }
+}
+
+function formatAutoReplyText(text: string): string {
+  const trimmedText = text.trim();
+  if (!autoReplyPrefix) {
+    return trimmedText;
+  }
+  return trimmedText.startsWith(autoReplyPrefix) ? trimmedText : `${autoReplyPrefix} ${trimmedText}`;
 }
 
 async function buildSmartReplies(client: LarkUserClient, target: ResolvedTarget, incomingMessage: string, selfOpenId: string | undefined, endTime: number, smartReply: SmartReplyGenerator): Promise<string[]> {
@@ -864,6 +874,10 @@ async function readConversationContext(client: LarkUserClient, target: ResolvedT
 }
 
 function isDelegatedAutoReplyText(text: string): boolean {
+  if (autoReplyPrefix && text.trim().startsWith(autoReplyPrefix)) {
+    return true;
+  }
+
   const normalizedText = text.replace(/\s+/g, "");
   if (replyTexts.some((replyText) => normalizedText === replyText.replace(/\s+/g, ""))) {
     return true;

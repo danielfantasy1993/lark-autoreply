@@ -206,7 +206,8 @@ function readMessageCreateTime(message: Message): number {
 }
 
 function isUsableText(text: string): boolean {
-  return Boolean(text && text.length <= 500 && !text.includes("自动回复：") && !text.includes("我现在不在"));
+  const trimmedText = text.trim();
+  return Boolean(trimmedText && trimmedText.length <= 500 && !trimmedText.startsWith("AR:") && !trimmedText.includes("自动回复：") && !trimmedText.includes("我现在不在"));
 }
 
 function readPositiveInteger(value: string | undefined, fallback: number): number {
