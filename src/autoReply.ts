@@ -262,6 +262,8 @@ const maxSmartReplyMessages = Math.min(readPositiveInteger(process.env.LARK_SMAR
 const realtimeWeatherEnabled = process.env.LARK_REALTIME_WEATHER_ENABLED !== "false";
 const realtimeWeatherDefaultLocation = process.env.LARK_REALTIME_WEATHER_DEFAULT_LOCATION?.trim();
 const realtimeReplyDelayMs = readNonNegativeInteger(process.env.LARK_REALTIME_REPLY_DELAY_MS, 1800);
+const skipIfSelfRepliedEnabled = process.env.LARK_AUTOREPLY_SKIP_IF_SELF_REPLIED_ENABLED === "true";
+const selfReplyCheckDelayMs = readNonNegativeInteger(process.env.LARK_AUTOREPLY_SELF_REPLY_CHECK_DELAY_MS, 2_000);
 const replyExisting = process.env.LARK_AUTOREPLY_REPLY_EXISTING === "true";
 const maxDepartmentUsers = readPositiveNumber(process.env.LARK_AUTOREPLY_MAX_DEPARTMENT_USERS, 1000);
 const maxDepartmentDepth = readPositiveNumber(process.env.LARK_AUTOREPLY_MAX_DEPARTMENT_DEPTH, 6);
@@ -454,6 +456,7 @@ async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: Au
     }
 
     const useSmartReply = smartReply !== undefined && shouldUseSmartReply(target);
+    const replyGuardStartedAt = Date.now();
     if (!useSmartReply && isFixedReplySuppressedNow()) {
       state.repliedMessageIds = [...(state.repliedMessageIds ?? []), messageId].slice(-200);
       console.log(`Skipped fixed reply to ${target.name} message ${messageId} during Beijing working window.`);
@@ -461,8 +464,20 @@ async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: Au
     }
 
     const incomingMessage = extractMessageText(message.msg_type, message.content ?? message.body?.content);
+    const shouldGuardBeforeImmediateReply = useSmartReply && realtimeWeatherEnabled && (isWeatherRequest(incomingMessage) || hasActivePendingWeatherRequest(state, target.chatId));
+    if (shouldGuardBeforeImmediateReply && await shouldSkipBecauseSelfReplied(client, target, selfOpenId, messageId, createTime, replyGuardStartedAt)) {
+      state.repliedMessageIds = [...(state.repliedMessageIds ?? []), messageId].slice(-200);
+      console.log(`Skipped auto reply to ${target.name} message ${messageId} because you already replied manually.`);
+      continue;
+    }
+
     const realtimeRepliedBy = useSmartReply ? await trySendRealtimeWeatherReply(client, botClient, state, target, incomingMessage, messageId) : undefined;
     const texts = realtimeRepliedBy ? [] : useSmartReply && smartReply ? await buildSmartReplies(client, target, incomingMessage, selfOpenId, endTime, smartReply) : replyTexts;
+    if (!realtimeRepliedBy && await shouldSkipBecauseSelfReplied(client, target, selfOpenId, messageId, createTime, replyGuardStartedAt)) {
+      state.repliedMessageIds = [...(state.repliedMessageIds ?? []), messageId].slice(-200);
+      console.log(`Skipped auto reply to ${target.name} message ${messageId} because you replied while the reply was being prepared.`);
+      continue;
+    }
     const repliedBy = realtimeRepliedBy ?? await sendAutoReply(client, botClient, target, texts, messageId);
     state.repliedMessageIds = [...(state.repliedMessageIds ?? []), messageId].slice(-200);
     state.lastReplyAtByChat = { ...(state.lastReplyAtByChat ?? {}), [target.chatId]: Date.now() };
@@ -495,6 +510,48 @@ async function listMessages(client: LarkUserClient, chatId: string, startTime: n
   });
 
   return response.data?.items ?? [];
+}
+
+async function shouldSkipBecauseSelfReplied(
+  client: LarkUserClient,
+  target: ResolvedTarget,
+  selfOpenId: string | undefined,
+  sourceMessageId: string,
+  sourceCreateTime: number,
+  guardStartedAt: number
+): Promise<boolean> {
+  if (!skipIfSelfRepliedEnabled || !selfOpenId) {
+    return false;
+  }
+
+  const remainingDelayMs = selfReplyCheckDelayMs - (Date.now() - guardStartedAt);
+  if (remainingDelayMs > 0) {
+    await delay(remainingDelayMs);
+  }
+
+  const endTime = Math.floor(Date.now() / 1000);
+  const messages = await listMessages(client, target.chatId, Math.max(0, sourceCreateTime - 1), endTime);
+  let sourceSeen = false;
+  for (const message of messages) {
+    if (message.message_id === sourceMessageId) {
+      sourceSeen = true;
+      continue;
+    }
+
+    if (!sourceSeen && readMessageCreateTime(message) <= sourceCreateTime) {
+      continue;
+    }
+
+    if (getSenderOpenId(message) !== selfOpenId) {
+      continue;
+    }
+
+    const text = extractMessageText(message.msg_type, message.content ?? message.body?.content);
+    if (text && !isDelegatedAutoReplyText(text)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function sendTextMessage(client: LarkUserClient, chatId: string, text: string, sourceMessageId: string, replyIndex: number): Promise<void> {
@@ -565,7 +622,7 @@ async function buildSmartReplies(client: LarkUserClient, target: ResolvedTarget,
 }
 
 async function trySendRealtimeWeatherReply(client: LarkUserClient, botClient: LarkClient, state: AutoReplyState, target: ResolvedTarget, incomingMessage: string, sourceMessageId: string): Promise<"user" | "bot" | undefined> {
-  const hasPendingWeatherRequest = Boolean(state.pendingWeatherByChat?.[target.chatId] && Date.now() - state.pendingWeatherByChat[target.chatId].requestedAt < 10 * 60 * 1000);
+  const hasPendingWeatherRequest = hasActivePendingWeatherRequest(state, target.chatId);
   if (!realtimeWeatherEnabled) {
     return undefined;
   }
@@ -603,6 +660,10 @@ async function trySendRealtimeWeatherReply(client: LarkUserClient, botClient: La
   await delay(Math.max(0, realtimeReplyDelayMs - (Date.now() - lookupStartedAt)));
   await sendAutoReply(client, botClient, target, splitSmartReplyTexts(weatherText), sourceMessageId, 1);
   return repliedBy;
+}
+
+function hasActivePendingWeatherRequest(state: AutoReplyState, chatId: string): boolean {
+  return Boolean(state.pendingWeatherByChat?.[chatId] && Date.now() - state.pendingWeatherByChat[chatId].requestedAt < 10 * 60 * 1000);
 }
 
 function clearPendingWeatherRequest(state: AutoReplyState, chatId: string): void {

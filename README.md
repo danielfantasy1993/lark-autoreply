@@ -65,6 +65,15 @@ LARK_AUTOREPLY_VERBOSE_SKIPPED_TARGETS=false
 
 低延迟轮询可以用 `LARK_AUTOREPLY_POLL_MS`、`LARK_AUTOREPLY_PRIORITY_POLL_CONCURRENCY`、`LARK_AUTOREPLY_FULL_POLL_MS` 和 `LARK_AUTOREPLY_POLL_CONCURRENCY` 控制。开启混合模式时，智能回复目标会走优先通道，例如 `LARK_AUTOREPLY_POLL_MS=300` 表示李文贤、何运伟、`external:李翔` 每轮结束后只等 300ms；固定回复目标走全量扫描，例如 `LARK_AUTOREPLY_FULL_POLL_MS=10000` 表示每 10 秒扫一次。`LARK_AUTOREPLY_POLL_OVERLAP_SECONDS` 会让每次轮询向前重叠一小段时间，再用已回复消息 ID 去重，避免飞书消息列表接口短暂延迟时漏掉最后一条消息。程序遇到飞书限流后会按 `LARK_AUTOREPLY_RATE_LIMIT_BACKOFF_MS` 和 `LARK_AUTOREPLY_MAX_BACKOFF_MS` 自动退避。
 
+飞书开放平台的消息已读接口目前只能查询应用/机器人自己发出的消息是否被别人读了，不能用当前用户 token 查询“别人发给我以后我是否已读”。如果想避免你已经在飞书里手动接话后机器人还继续回复，可以开启手动回复保护：
+
+```text
+LARK_AUTOREPLY_SKIP_IF_SELF_REPLIED_ENABLED=true
+LARK_AUTOREPLY_SELF_REPLY_CHECK_DELAY_MS=2000
+```
+
+开启后，程序会在发送自动回复前等待一个短窗口，再重新读取这段聊天；如果发现你本人已经在目标消息之后发过非自动回复内容，就把该目标消息记为已处理并跳过自动回复。智能回复生成耗时会计入这个等待窗口，所以通常不会额外慢满整段时间。
+
 启动日志默认只显示目标数量和回复分组，避免大部门刷屏。需要排查名单时，把 `LARK_AUTOREPLY_VERBOSE_TARGETS=true`；需要查看哪些部门成员因为没有私聊 `chat_id` 被跳过时，把 `LARK_AUTOREPLY_VERBOSE_SKIPPED_TARGETS=true`。
 
 自动回复只会响应明确识别为目标联系人发给你的消息；你发给对方的消息、机器人自己发出的消息、以及接口没有返回发送人 `open_id` 的消息都会跳过。目标联系人发来的文字、表情、链接、图片等任意消息类型都会触发回复。固定文案模式会按 `LARK_AUTOREPLY_TEXTS` 顺序连续发送多条回复；多条文本用 `|` 分隔，如果没有配置 `LARK_AUTOREPLY_TEXTS`，旧的 `LARK_AUTOREPLY_TEXT` 仍兼容。
