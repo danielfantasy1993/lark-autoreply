@@ -25,8 +25,12 @@ type Message = {
     content?: string;
   };
   sender?: {
+    id?: string;
+    id_type?: string;
     sender_id?: {
       open_id?: string;
+      user_id?: string;
+      union_id?: string;
     };
   };
 };
@@ -42,7 +46,13 @@ type ApiList<T> = {
 type UserInfoResponse = {
   data?: {
     open_id?: string;
+    user_id?: string;
   };
+};
+
+type UserIdentity = {
+  openId?: string;
+  userId?: string;
 };
 
 type LearnedCase = {
@@ -69,9 +79,9 @@ const autoReplyPrefix = process.env.LARK_AUTOREPLY_PREFIX ?? "AR:";
 
 async function main(): Promise<void> {
   const client = LarkUserClient.fromEnv(tokenFile);
-  const selfOpenId = await getSelfOpenId(client);
-  if (!selfOpenId) {
-    throw new Error("Could not read current user open_id.");
+  const self = await getSelfIdentity(client);
+  if (!self.openId && !self.userId) {
+    throw new Error("Could not read current user id.");
   }
 
   const state = await readState();
@@ -89,7 +99,7 @@ async function main(): Promise<void> {
       console.warn(`Could not learn from ${target.key}: ${error instanceof Error ? error.message : String(error)}`);
       return [];
     });
-    cases.push(...extractCases(target.key, target.openId, selfOpenId, messages));
+    cases.push(...extractCases(target.key, target.openId, self, messages));
     if (cases.length >= maxCases) {
       break;
     }
@@ -108,9 +118,9 @@ async function main(): Promise<void> {
   console.log(`Saved style profile to ${outputProfileFile}`);
 }
 
-async function getSelfOpenId(client: LarkUserClient): Promise<string | undefined> {
+async function getSelfIdentity(client: LarkUserClient): Promise<UserIdentity> {
   const response = await client.request<UserInfoResponse>({ method: "GET", path: "/open-apis/authen/v1/user_info" });
-  return response.data?.open_id;
+  return { openId: response.data?.open_id, userId: response.data?.user_id };
 }
 
 async function readState(): Promise<AutoReplyState> {
@@ -141,9 +151,9 @@ async function listMessages(client: LarkUserClient, chatId: string, startTime: n
   return messages.slice(0, maxMessagesPerChat);
 }
 
-function extractCases(targetName: string, targetOpenId: string, selfOpenId: string, messages: Message[]): LearnedCase[] {
+function extractCases(targetName: string, targetOpenId: string, self: UserIdentity, messages: Message[]): LearnedCase[] {
   if (learnMode === "broad") {
-    return extractBroadCases(targetName, selfOpenId, messages);
+    return extractBroadCases(targetName, self, messages);
   }
 
   const cases: LearnedCase[] = [];
@@ -152,7 +162,7 @@ function extractCases(targetName: string, targetOpenId: string, selfOpenId: stri
     if (getSenderOpenId(incoming) !== targetOpenId) {
       continue;
     }
-    const replyIndex = messages.findIndex((message, candidateIndex) => candidateIndex > index && getSenderOpenId(message) === selfOpenId && readMessageCreateTime(message) - readMessageCreateTime(incoming) <= 15 * 60);
+    const replyIndex = messages.findIndex((message, candidateIndex) => candidateIndex > index && isSelfMessage(message, self) && readMessageCreateTime(message) - readMessageCreateTime(incoming) <= 15 * 60);
     if (replyIndex === -1) {
       continue;
     }
@@ -163,7 +173,7 @@ function extractCases(targetName: string, targetOpenId: string, selfOpenId: stri
       continue;
     }
     const context = messages.slice(Math.max(0, index - 6), replyIndex).map((message): SmartReplyConversationMessage => ({
-      speaker: getSenderOpenId(message) === selfOpenId ? "me" : getSenderOpenId(message) === targetOpenId ? "target" : "other",
+      speaker: isSelfMessage(message, self) ? "me" : getSenderOpenId(message) === targetOpenId ? "target" : "other",
       text: extractMessageText(message.msg_type, message.content ?? message.body?.content),
       createdAt: readMessageCreateTime(message)
     }));
@@ -175,25 +185,25 @@ function extractCases(targetName: string, targetOpenId: string, selfOpenId: stri
       idealReply: replyText
     });
   }
-  return learnMode === "both" ? dedupeCases([...cases, ...extractBroadCases(targetName, selfOpenId, messages)]) : cases;
+  return learnMode === "both" ? dedupeCases([...cases, ...extractBroadCases(targetName, self, messages)]) : cases;
 }
 
-function extractBroadCases(targetName: string, selfOpenId: string, messages: Message[]): LearnedCase[] {
+function extractBroadCases(targetName: string, self: UserIdentity, messages: Message[]): LearnedCase[] {
   const cases: LearnedCase[] = [];
   for (let replyIndex = 1; replyIndex < messages.length; replyIndex += 1) {
     const reply = messages[replyIndex];
-    if (getSenderOpenId(reply) !== selfOpenId) {
+    if (!isSelfMessage(reply, self)) {
       continue;
     }
 
-    const incomingIndex = findNearestIncomingIndex(messages, replyIndex, selfOpenId);
+    const incomingIndex = findNearestIncomingIndex(messages, replyIndex, self);
     if (incomingIndex === -1) {
       continue;
     }
 
     const incoming = messages[incomingIndex];
-    const incomingSenderOpenId = getSenderOpenId(incoming);
-    if (!incomingSenderOpenId) {
+    const incomingSenderId = getSenderId(incoming);
+    if (!incomingSenderId) {
       continue;
     }
 
@@ -204,7 +214,7 @@ function extractBroadCases(targetName: string, selfOpenId: string, messages: Mes
     }
 
     const context = messages.slice(Math.max(0, incomingIndex - 6), replyIndex).map((message): SmartReplyConversationMessage => ({
-      speaker: getSenderOpenId(message) === selfOpenId ? "me" : getSenderOpenId(message) === incomingSenderOpenId ? "target" : "other",
+      speaker: isSelfMessage(message, self) ? "me" : getSenderId(message) === incomingSenderId ? "target" : "other",
       text: extractMessageText(message.msg_type, message.content ?? message.body?.content),
       createdAt: readMessageCreateTime(message)
     }));
@@ -220,16 +230,16 @@ function extractBroadCases(targetName: string, selfOpenId: string, messages: Mes
   return cases;
 }
 
-function findNearestIncomingIndex(messages: Message[], replyIndex: number, selfOpenId: string): number {
+function findNearestIncomingIndex(messages: Message[], replyIndex: number, self: UserIdentity): number {
   const replyTime = readMessageCreateTime(messages[replyIndex]);
   for (let index = replyIndex - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    const senderOpenId = getSenderOpenId(message);
+    const senderId = getSenderId(message);
     const ageSeconds = replyTime - readMessageCreateTime(message);
     if (ageSeconds > 15 * 60) {
       return -1;
     }
-    if (senderOpenId && senderOpenId !== selfOpenId) {
+    if (senderId && !isSelfMessage(message, self)) {
       return index;
     }
   }
@@ -285,6 +295,18 @@ function topPhrases(values: string[], limit: number): string[] {
 
 function getSenderOpenId(message: Message): string | undefined {
   return message.sender?.sender_id?.open_id;
+}
+
+function getSenderId(message: Message): string | undefined {
+  return message.sender?.sender_id?.open_id ?? message.sender?.sender_id?.user_id ?? message.sender?.id;
+}
+
+function isSelfMessage(message: Message, self: UserIdentity): boolean {
+  const sender = message.sender;
+  return Boolean(
+    (self.openId && (sender?.sender_id?.open_id === self.openId || sender?.id === self.openId)) ||
+      (self.userId && (sender?.sender_id?.user_id === self.userId || sender?.id === self.userId))
+  );
 }
 
 function readMessageCreateTime(message: Message): number {
