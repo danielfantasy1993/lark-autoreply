@@ -34,6 +34,8 @@ type Message = {
 type ApiList<T> = {
   data?: {
     items?: T[];
+    has_more?: boolean;
+    page_token?: string;
   };
 };
 
@@ -59,6 +61,8 @@ const stateFile = resolvePath(process.env.LARK_AUTOREPLY_STATE_FILE || ".lark-au
 const lookbackDays = readPositiveInteger(process.env.LARK_STYLE_LEARN_LOOKBACK_DAYS, 14);
 const maxChats = readPositiveInteger(process.env.LARK_STYLE_LEARN_MAX_CHATS, 20);
 const maxCases = readPositiveInteger(process.env.LARK_STYLE_LEARN_MAX_CASES, 120);
+const maxMessagesPerChat = readPositiveInteger(process.env.LARK_STYLE_LEARN_MAX_MESSAGES_PER_CHAT, 200);
+const learnMode = readLearnMode(process.env.LARK_STYLE_LEARN_MODE);
 const outputCasesFile = resolvePath(process.env.LARK_STYLE_LEARN_CASES_FILE || ".training/learned-reply-cases.json");
 const outputProfileFile = resolvePath(process.env.LARK_SMART_REPLY_LEARNED_STYLE_FILE || ".training/style-profile.md");
 const autoReplyPrefix = process.env.LARK_AUTOREPLY_PREFIX ?? "AR:";
@@ -99,7 +103,7 @@ async function main(): Promise<void> {
   await mkdir(dirname(outputProfileFile), { recursive: true });
   await writeFile(outputProfileFile, `${profile}\n`, "utf8");
 
-  console.log(`Learned ${selectedCases.length} reply case(s) from ${targets.length} chat(s).`);
+  console.log(`Learned ${selectedCases.length} reply case(s) from ${targets.length} chat(s) using ${learnMode} mode.`);
   console.log(`Saved cases to ${outputCasesFile}`);
   console.log(`Saved style profile to ${outputProfileFile}`);
 }
@@ -114,22 +118,34 @@ async function readState(): Promise<AutoReplyState> {
 }
 
 async function listMessages(client: LarkUserClient, chatId: string, startTime: number, endTime: number): Promise<Message[]> {
-  const response = await client.request<ApiList<Message>>({
-    method: "GET",
-    path: "/open-apis/im/v1/messages",
-    query: {
-      container_id_type: "chat",
-      container_id: chatId,
-      start_time: startTime,
-      end_time: endTime,
-      sort_type: "ByCreateTimeAsc",
-      page_size: 50
-    }
-  });
-  return response.data?.items ?? [];
+  const messages: Message[] = [];
+  let pageToken: string | undefined;
+  do {
+    const response = await client.request<ApiList<Message>>({
+      method: "GET",
+      path: "/open-apis/im/v1/messages",
+      query: {
+        container_id_type: "chat",
+        container_id: chatId,
+        start_time: startTime,
+        end_time: endTime,
+        sort_type: "ByCreateTimeAsc",
+        page_size: 50,
+        page_token: pageToken
+      }
+    });
+    messages.push(...(response.data?.items ?? []));
+    pageToken = response.data?.has_more && messages.length < maxMessagesPerChat ? response.data.page_token : undefined;
+  } while (pageToken);
+
+  return messages.slice(0, maxMessagesPerChat);
 }
 
 function extractCases(targetName: string, targetOpenId: string, selfOpenId: string, messages: Message[]): LearnedCase[] {
+  if (learnMode === "broad") {
+    return extractBroadCases(targetName, selfOpenId, messages);
+  }
+
   const cases: LearnedCase[] = [];
   for (let index = 0; index < messages.length - 1; index += 1) {
     const incoming = messages[index];
@@ -159,7 +175,77 @@ function extractCases(targetName: string, targetOpenId: string, selfOpenId: stri
       idealReply: replyText
     });
   }
+  return learnMode === "both" ? dedupeCases([...cases, ...extractBroadCases(targetName, selfOpenId, messages)]) : cases;
+}
+
+function extractBroadCases(targetName: string, selfOpenId: string, messages: Message[]): LearnedCase[] {
+  const cases: LearnedCase[] = [];
+  for (let replyIndex = 1; replyIndex < messages.length; replyIndex += 1) {
+    const reply = messages[replyIndex];
+    if (getSenderOpenId(reply) !== selfOpenId) {
+      continue;
+    }
+
+    const incomingIndex = findNearestIncomingIndex(messages, replyIndex, selfOpenId);
+    if (incomingIndex === -1) {
+      continue;
+    }
+
+    const incoming = messages[incomingIndex];
+    const incomingSenderOpenId = getSenderOpenId(incoming);
+    if (!incomingSenderOpenId) {
+      continue;
+    }
+
+    const incomingText = extractMessageText(incoming.msg_type, incoming.content ?? incoming.body?.content);
+    const replyText = extractMessageText(reply.msg_type, reply.content ?? reply.body?.content);
+    if (!isUsableText(incomingText) || !isUsableText(replyText)) {
+      continue;
+    }
+
+    const context = messages.slice(Math.max(0, incomingIndex - 6), replyIndex).map((message): SmartReplyConversationMessage => ({
+      speaker: getSenderOpenId(message) === selfOpenId ? "me" : getSenderOpenId(message) === incomingSenderOpenId ? "target" : "other",
+      text: extractMessageText(message.msg_type, message.content ?? message.body?.content),
+      createdAt: readMessageCreateTime(message)
+    }));
+
+    cases.push({
+      id: `${targetName}-${incoming.message_id ?? incomingIndex}-${reply.message_id ?? replyIndex}`,
+      targetName,
+      incomingMessage: incomingText,
+      conversation: context,
+      idealReply: replyText
+    });
+  }
   return cases;
+}
+
+function findNearestIncomingIndex(messages: Message[], replyIndex: number, selfOpenId: string): number {
+  const replyTime = readMessageCreateTime(messages[replyIndex]);
+  for (let index = replyIndex - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const senderOpenId = getSenderOpenId(message);
+    const ageSeconds = replyTime - readMessageCreateTime(message);
+    if (ageSeconds > 15 * 60) {
+      return -1;
+    }
+    if (senderOpenId && senderOpenId !== selfOpenId) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function dedupeCases(cases: LearnedCase[]): LearnedCase[] {
+  const seen = new Set<string>();
+  return cases.filter((item) => {
+    const key = `${item.incomingMessage}\n${item.idealReply}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function buildStyleProfile(cases: LearnedCase[]): string {
@@ -214,6 +300,10 @@ function isUsableText(text: string): boolean {
 function readPositiveInteger(value: string | undefined, fallback: number): number {
   const numberValue = Number(value);
   return Number.isInteger(numberValue) && numberValue > 0 ? numberValue : fallback;
+}
+
+function readLearnMode(value: string | undefined): "target" | "broad" | "both" {
+  return value === "target" || value === "both" ? value : "broad";
 }
 
 function resolvePath(value: string): string {

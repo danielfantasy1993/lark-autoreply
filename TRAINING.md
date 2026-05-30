@@ -28,8 +28,12 @@ npm.cmd run smart:learn
 LARK_STYLE_LEARN_LOOKBACK_DAYS=14
 LARK_STYLE_LEARN_MAX_CHATS=20
 LARK_STYLE_LEARN_MAX_CASES=120
+LARK_STYLE_LEARN_MAX_MESSAGES_PER_CHAT=200
+LARK_STYLE_LEARN_MODE=broad
 LARK_SMART_REPLY_LEARNED_STYLE_FILE=.training/style-profile.md
 ```
+
+`LARK_STYLE_LEARN_MODE` 默认是 `broad`，会从每个已解析聊天里抽取“任意非我消息 -> 我本人随后手动回复”的样本。也可以设为 `target`，只学习配置目标本人发来的消息；或者设为 `both`，同时使用两种抽样方式。
 
 服务器上也可以跑：
 
