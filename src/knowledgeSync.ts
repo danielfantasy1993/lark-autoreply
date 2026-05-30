@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractMessageText } from "./smartReply.js";
 import { LarkUserClient } from "./userTokenClient.js";
-import { getKnowledgeIndexFile, readKnowledgeKeywords, readList, saveKnowledgeIndex, shortStableId, type KnowledgeItem } from "./knowledgeStore.js";
+import { getKnowledgeIndexFile, loadKnowledgeIndex, readKnowledgeKeywords, readList, saveKnowledgeIndex, shortStableId, type KnowledgeItem } from "./knowledgeStore.js";
 
 loadDotEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") });
 
@@ -114,6 +114,7 @@ const syncDays = readPositiveNumber(process.env.LARK_KNOWLEDGE_SYNC_DAYS, 30);
 const maxChats = readPositiveInteger(process.env.LARK_KNOWLEDGE_MAX_CHATS, 120);
 const maxMessagesPerChat = readPositiveInteger(process.env.LARK_KNOWLEDGE_MAX_MESSAGES_PER_CHAT, 50);
 const syncRateLimitBackoffMs = readPositiveInteger(process.env.LARK_KNOWLEDGE_SYNC_RATE_LIMIT_BACKOFF_MS, 3_000);
+const checkpointAfterChats = process.env.LARK_KNOWLEDGE_CHECKPOINT_AFTER_CHATS !== "false";
 const includeAllMonitoredChats = process.env.LARK_KNOWLEDGE_SYNC_MONITORED_CHATS !== "false";
 const syncAllChatMessages = process.env.LARK_KNOWLEDGE_SYNC_ALL_CHAT_MESSAGES !== "false";
 const syncCloudSearch = process.env.LARK_KNOWLEDGE_SEARCH_CLOUD_DOCS !== "false";
@@ -136,6 +137,9 @@ async function main(): Promise<void> {
   items.push(...readManualKnowledgeItems());
   if (includeAllMonitoredChats) {
     items.push(...(await syncMonitoredChatItems(client)));
+    if (checkpointAfterChats) {
+      await saveChatCheckpoint(items);
+    }
   }
   if (syncCloudSearch) {
     if (!(await hasAnyRequiredUserScope(cloudSearchRequiredScopes))) {
@@ -373,7 +377,11 @@ async function syncMonitoredChatItems(client: LarkUserClient): Promise<Knowledge
   const endTime = Math.floor(Date.now() / 1000);
   const startTime = Math.max(0, endTime - syncDays * 86400);
 
-  for (const [key, target] of targets) {
+  console.log(`Chat sync scanning ${targets.length} monitored chat(s).`);
+  for (const [index, [key, target]] of targets.entries()) {
+    if (index === 0 || (index + 1) % 10 === 0 || index + 1 === targets.length) {
+      console.log(`Chat sync progress ${index + 1}/${targets.length}: ${key}`);
+    }
     if (!target.chatId) {
       continue;
     }
@@ -410,6 +418,13 @@ async function syncMonitoredChatItems(client: LarkUserClient): Promise<Knowledge
     console.log(`Chat sync collected ${items.length} item(s) from ${targets.length} monitored chat(s).`);
   }
   return items;
+}
+
+async function saveChatCheckpoint(items: KnowledgeItem[]): Promise<void> {
+  const previous = await loadKnowledgeIndex(indexFile);
+  const preservedItems = previous.items.filter((item) => item.source === "doc" || item.source === "sheet" || item.source === "mail");
+  await saveKnowledgeIndex(indexFile, [...preservedItems, ...items]);
+  console.log(`Knowledge checkpoint saved after chat sync: ${preservedItems.length + items.length} item(s).`);
 }
 
 async function listMessages(client: LarkUserClient, chatId: string, startTime: number, endTime: number): Promise<Message[]> {
