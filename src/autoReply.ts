@@ -169,6 +169,7 @@ const excludedTargetNames = readNameList(process.env.LARK_AUTOREPLY_EXCLUDE_TARG
 const replyMode = readReplyMode();
 const replyTexts = readReplyTexts();
 const autoReplyMarker = readAutoReplyMarker();
+const replyToSourceMessageEnabled = process.env.LARK_AUTOREPLY_REPLY_TO_SOURCE_MESSAGE_ENABLED !== "false";
 const fixedReplySuppressWindowsEnabled = process.env.LARK_AUTOREPLY_FIXED_REPLY_SUPPRESS_WINDOWS_ENABLED === "true";
 const fixedReplySuppressWindows = readFixedReplySuppressWindows();
 const knownWeatherLocations = [
@@ -555,6 +556,16 @@ async function shouldSkipBecauseSelfReplied(
 }
 
 async function sendTextMessage(client: LarkUserClient, chatId: string, text: string, sourceMessageId: string, replyIndex: number): Promise<void> {
+  const uuid = `ar-${shortHash(`${sourceMessageId}:${replyIndex}`)}`;
+  if (replyToSourceMessageEnabled) {
+    try {
+      await replyTextMessage(client, sourceMessageId, text, uuid);
+      return;
+    } catch (error) {
+      console.warn(`Could not reply to source message ${sourceMessageId}; falling back to direct chat send: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   await client.request({
     method: "POST",
     path: "/open-apis/im/v1/messages",
@@ -563,12 +574,34 @@ async function sendTextMessage(client: LarkUserClient, chatId: string, text: str
       receive_id: chatId,
       msg_type: "text",
       content: JSON.stringify({ text }),
-      uuid: `ar-${shortHash(`${sourceMessageId}:${replyIndex}`)}`
+      uuid
+    }
+  });
+}
+
+async function replyTextMessage(client: LarkUserClient, sourceMessageId: string, text: string, uuid: string): Promise<void> {
+  await client.request({
+    method: "POST",
+    path: `/open-apis/im/v1/messages/${sourceMessageId}/reply`,
+    body: {
+      msg_type: "text",
+      content: JSON.stringify({ text }),
+      uuid
     }
   });
 }
 
 async function sendBotTextMessage(client: LarkClient, openId: string, text: string, sourceMessageId: string, replyIndex: number): Promise<void> {
+  const uuid = `bot-ar-${shortHash(`${sourceMessageId}:${replyIndex}`)}`;
+  if (replyToSourceMessageEnabled) {
+    try {
+      await replyBotTextMessage(client, sourceMessageId, text, uuid);
+      return;
+    } catch (error) {
+      console.warn(`Could not reply to source message ${sourceMessageId} as bot; falling back to direct send: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   await client.request({
     method: "POST",
     path: "/open-apis/im/v1/messages",
@@ -577,7 +610,19 @@ async function sendBotTextMessage(client: LarkClient, openId: string, text: stri
       receive_id: openId,
       msg_type: "text",
       content: JSON.stringify({ text }),
-      uuid: `bot-ar-${shortHash(`${sourceMessageId}:${replyIndex}`)}`
+      uuid
+    }
+  });
+}
+
+async function replyBotTextMessage(client: LarkClient, sourceMessageId: string, text: string, uuid: string): Promise<void> {
+  await client.request({
+    method: "POST",
+    path: `/open-apis/im/v1/messages/${sourceMessageId}/reply`,
+    body: {
+      msg_type: "text",
+      content: JSON.stringify({ text }),
+      uuid
     }
   });
 }
