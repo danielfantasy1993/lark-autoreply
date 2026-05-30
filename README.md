@@ -66,7 +66,7 @@ LARK_AUTOREPLY_VERBOSE_SKIPPED_TARGETS=false
 
 大部门展开时，建议保持 `LARK_AUTOREPLY_SEARCH_MISSING_DEPARTMENT_CHAT_IDS=false`，只纳入飞书接口直接返回了私聊 `chat_id` 或已经缓存过 `chat_id` 的联系人，避免逐个搜索触发通讯录接口限流。
 
-低延迟轮询可以用 `LARK_AUTOREPLY_POLL_MS`、`LARK_AUTOREPLY_PRIORITY_POLL_CONCURRENCY`、`LARK_AUTOREPLY_FULL_POLL_MS` 和 `LARK_AUTOREPLY_POLL_CONCURRENCY` 控制。开启混合模式时，智能回复目标会走优先通道，例如 `LARK_AUTOREPLY_POLL_MS=300` 表示李文贤、何运伟、`external:李翔` 每轮结束后只等 300ms；固定回复目标走全量扫描，例如 `LARK_AUTOREPLY_FULL_POLL_MS=10000` 表示每 10 秒扫一次。`LARK_AUTOREPLY_POLL_OVERLAP_SECONDS` 会让每次轮询向前重叠一小段时间，再用已回复消息 ID 去重，避免飞书消息列表接口短暂延迟时漏掉最后一条消息。程序遇到飞书限流后会按 `LARK_AUTOREPLY_RATE_LIMIT_BACKOFF_MS` 和 `LARK_AUTOREPLY_MAX_BACKOFF_MS` 自动退避。
+低延迟轮询可以用 `LARK_AUTOREPLY_POLL_MS`、`LARK_AUTOREPLY_PRIORITY_POLL_CONCURRENCY`、`LARK_AUTOREPLY_FULL_POLL_MS` 和 `LARK_AUTOREPLY_POLL_CONCURRENCY` 控制。开启混合模式时，智能回复目标会走优先通道，例如 `LARK_AUTOREPLY_POLL_MS=300` 表示李文贤、何运伟、`external:李翔` 每轮结束后只等 300ms；固定回复目标默认走全量扫描，例如 `LARK_AUTOREPLY_FULL_POLL_MS=10000` 表示每 10 秒扫一次。需要固定文案但又要低延迟的联系人，可以放进 `LARK_AUTOREPLY_PRIORITY_FIXED_TARGET_NAMES`，例如 `person:Lee` 会走优先轮询但仍发送固定文案。`LARK_AUTOREPLY_POLL_OVERLAP_SECONDS` 会让每次轮询向前重叠一小段时间，再用已回复消息 ID 去重，避免飞书消息列表接口短暂延迟时漏掉最后一条消息。程序遇到飞书限流后会按 `LARK_AUTOREPLY_RATE_LIMIT_BACKOFF_MS` 和 `LARK_AUTOREPLY_MAX_BACKOFF_MS` 自动退避。
 
 飞书开放平台的消息已读接口目前只能查询应用/机器人自己发出的消息是否被别人读了，不能用当前用户 token 查询“别人发给我以后我是否已读”。如果想避免你已经在飞书里手动接话后机器人还继续回复，可以开启手动回复保护：
 

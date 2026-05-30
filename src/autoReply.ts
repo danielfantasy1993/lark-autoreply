@@ -191,6 +191,7 @@ const stateFile = resolvePath(process.env.LARK_AUTOREPLY_STATE_FILE || ".lark-au
 const targetName = process.env.LARK_AUTOREPLY_TARGET_NAME || "陈威";
 const targetSpecs = readTargetSpecs();
 const smartReplyTargetNames = readNameList(process.env.LARK_SMART_REPLY_TARGET_NAMES, ["李文贤", "何运伟"]);
+const priorityFixedTargetNames = readNameList(process.env.LARK_AUTOREPLY_PRIORITY_FIXED_TARGET_NAMES, []);
 const excludedTargetNames = readNameList(process.env.LARK_AUTOREPLY_EXCLUDE_TARGET_NAMES, []);
 const replyMode = readReplyMode();
 const replyTexts = readReplyTexts();
@@ -332,9 +333,11 @@ async function main(): Promise<void> {
   }
 
   const smartTargets = targets.filter(shouldUseSmartReply);
+  const priorityFixedTargets = targets.filter((target) => !shouldUseSmartReply(target) && shouldUsePriorityFixedReply(target));
   const smartReply = smartTargets.length > 0 ? createSmartReplyGenerator() : undefined;
-  const priorityTargets = smartTargets.length > 0 ? smartTargets : targets;
-  const fullScanTargets = smartTargets.length > 0 ? targets.filter((target) => !shouldUseSmartReply(target)) : [];
+  const priorityTargetKeys = new Set([...smartTargets, ...priorityFixedTargets].map((target) => target.key));
+  const priorityTargets = priorityTargetKeys.size > 0 ? targets.filter((target) => priorityTargetKeys.has(target.key)) : targets;
+  const fullScanTargets = priorityTargetKeys.size > 0 ? targets.filter((target) => !priorityTargetKeys.has(target.key)) : [];
   let activePriorityPollIntervalMs = pollIntervalMs;
   let activePriorityPollConcurrency = Math.min(priorityPollConcurrency, priorityTargets.length);
   let activeFullPollConcurrency = Math.min(pollConcurrency, Math.max(fullScanTargets.length, 1));
@@ -354,6 +357,9 @@ async function main(): Promise<void> {
   }
   console.log(`Excluded target names: ${excludedTargetNames.join(", ") || "none"}.`);
   console.log(formatReplyModeLog(smartTargets));
+  if (priorityFixedTargets.length > 0) {
+    console.log(`Priority fixed targets: ${priorityFixedTargets.map(formatTargetLabel).join(", ")}.`);
+  }
   if (fixedReplySuppressWindowsEnabled && fixedReplySuppressWindows.length > 0 && replyMode !== "smart") {
     console.log(`Fixed replies are suppressed during Beijing windows: ${formatFixedReplySuppressWindows()}.`);
   } else if (!fixedReplySuppressWindowsEnabled && fixedReplySuppressWindows.length > 0 && replyMode !== "smart") {
@@ -1727,10 +1733,14 @@ function shouldUseSmartReply(target: ResolvedTarget): boolean {
   if (replyMode === "fixed") {
     return false;
   }
-  return smartReplyTargetNames.some((selector) => matchesSmartReplySelector(target, selector));
+  return smartReplyTargetNames.some((selector) => matchesTargetSelector(target, selector));
 }
 
-function matchesSmartReplySelector(target: ResolvedTarget, selector: string): boolean {
+function shouldUsePriorityFixedReply(target: ResolvedTarget): boolean {
+  return priorityFixedTargetNames.some((selector) => matchesTargetSelector(target, selector));
+}
+
+function matchesTargetSelector(target: ResolvedTarget, selector: string): boolean {
   const trimmed = selector.trim();
   const separatorIndex = trimmed.indexOf(":");
   if (separatorIndex !== -1) {
