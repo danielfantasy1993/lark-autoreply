@@ -254,6 +254,7 @@ const priorityPollConcurrency = readPositiveInteger(process.env.LARK_AUTOREPLY_P
 const fullPollIntervalMs = readNonNegativeInteger(process.env.LARK_AUTOREPLY_FULL_POLL_MS, Math.max(pollIntervalMs, 10_000));
 const rateLimitBackoffMs = readPositiveInteger(process.env.LARK_AUTOREPLY_RATE_LIMIT_BACKOFF_MS, 3_000);
 const maxRateLimitBackoffMs = readPositiveInteger(process.env.LARK_AUTOREPLY_MAX_BACKOFF_MS, 30_000);
+const pollOverlapSeconds = readNonNegativeInteger(process.env.LARK_AUTOREPLY_POLL_OVERLAP_SECONDS, 120);
 const lookbackSeconds = readPositiveNumber(process.env.LARK_AUTOREPLY_LOOKBACK_SECONDS, 300);
 const contextLookbackSeconds = readPositiveNumber(process.env.LARK_SMART_REPLY_CONTEXT_SECONDS, 24 * 60 * 60);
 const maxSmartReplyContextMessages = readPositiveInteger(process.env.LARK_SMART_REPLY_MAX_CONTEXT_MESSAGES, 60);
@@ -432,7 +433,7 @@ function emptyPollTargetsResult(): PollTargetsResult {
 async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: AutoReplyState, target: ResolvedTarget, selfOpenId: string | undefined, smartReply: SmartReplyGenerator | undefined): Promise<void> {
   const endTime = Math.floor(Date.now() / 1000);
   const targetState = state.targets?.[target.key] ?? {};
-  const startTime = targetState.lastCheckedAt ?? endTime;
+  const startTime = targetState.lastCheckedAt === undefined ? endTime : Math.max(0, Math.min(targetState.lastCheckedAt, endTime - pollOverlapSeconds));
   const messages = await listMessages(client, target.chatId, startTime, endTime);
   let newestCreateTime = startTime;
 
