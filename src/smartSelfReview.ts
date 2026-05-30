@@ -216,7 +216,7 @@ function analyzeReply(reply: string, reviewCase: ReviewCase): string[] {
 function buildReport(sourceFile: string, results: ReviewResult[]): ReviewReport {
   const averageScore = round(results.reduce((sum, item) => sum + item.score, 0) / results.length);
   const similarities = results.map((item) => item.similarityToIdeal).filter((item): item is number => item !== undefined);
-  const frequentWarnings = topLabels(results.flatMap((item) => [...item.warnings, ...item.labels]), 10).map(([label, count]) => ({ label, count }));
+  const frequentWarnings = topLabels(results.flatMap((item) => [...item.warnings, ...item.labels.filter(isNegativeReviewLabel)]), 10).map(([label, count]) => ({ label, count }));
   return {
     generatedAt: new Date().toISOString(),
     sourceFile,
@@ -248,10 +248,17 @@ function buildRecommendations(results: ReviewResult[]): string[] {
   if (labels.has("low similarity to human reply")) {
     recommendations.push("补充更多真人理想回复样本，尤其是项目编号、天气、表情误判和短确认场景。");
   }
+  if (labels.has("过度客服腔") || labels.has("缺乏人味")) {
+    recommendations.push("压低客服式追问和正式总结腔；短确认优先回复 get、nice、太行、行 这类短句，不要凭空安排后续动作。");
+  }
   if (recommendations.length === 0) {
     recommendations.push("当前样本没有暴露明显硬伤；继续扩大样本量，观察低分案例。") ;
   }
   return recommendations;
+}
+
+function isNegativeReviewLabel(label: string): boolean {
+  return !/(有人味|符合上下文|无客服腔|无AI暴露|自然|可以直接发送|通过)/.test(label);
 }
 
 function formatMarkdown(report: ReviewReport): string {

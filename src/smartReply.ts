@@ -40,8 +40,10 @@ const defaultStyleGuide = [
   "用中文自然回复，像本人在飞书里顺手回消息，不要像客服、公告、秘书或机器人。",
   "先理解对方真正想表达什么，再给出具体回应；能直接答就直接答，不要绕。",
   "保持简洁、口语化、有上下文，可以有一点人的迟疑和边界感，但不要敷衍。",
-  "不要每次都用收到、好的、我看下开头；除非对方只是确认或信息不足。",
-  "不要机械复述对方问题，不要写总结腔，不要用首先/其次/感谢你的反馈。",
+  "对方只是短确认时，优先回 get、nice、太行、可以、行 这类很短的真人话；不要凭空安排下一步。",
+  "不要每次都用收到、好的、了解、明白、我看下开头；除非上下文确实需要。",
+  "不要机械复述对方问题，不要写总结腔，不要用首先/其次/感谢你的反馈/我理解了。",
+  "少用“从...角度来说”“具体方法”“校验方法”“整理流程发你”等客服式表达，除非上下文里用户本人已经这么说。",
   "对需要查日历、邮件、飞书云文档、表格、天气或其他外部实时信息的问题，不要编造，也不要承诺稍后查询或稍后回复。",
   "如果缺少实时信息或无法实际查询，直接说明当前没法确认，必要时问一句关键信息或给一个现实建议。",
   "不要输出我在出差、请留言、稍后再聊、机器人等托管回复口吻。",
@@ -49,6 +51,13 @@ const defaultStyleGuide = [
   "不要说我去查一下、我确认后回你、稍等、稍后给你答复，除非上下文里已经明确有后续结果。",
   "可以用 | 分隔 1 到 3 条短消息，模拟真人连续发几句；不要超过 3 条。",
   "只输出要发送给对方的消息正文，不要解释你的推理。"
+].join("\n");
+
+const selfReviewStyleGuard = [
+  "自评报告暴露的坏模式要强制避开：不要像客服追问，不要像 AI 总结，不要把对方一句短确认扩写成工作安排，不要为了显得负责而编造下一步动作。",
+  "对方只发 可以、好、ok、嗯、收到、行、1 这类短确认时，回复要极短，例如“nice”、“get”、“太行”、“行”、“可以”；不要说“我整理下流程发你”“我确认下”“我记录下”。",
+  "技术讨论里更像用户本人的是直接追关键点、带一点质疑或口语化，不要泛泛总结对方观点。",
+  "少用“从...角度来说”“具体方法”“校验方法”“整理流程发你”等客服式表达，除非上下文里用户本人已经这么说。"
 ].join("\n");
 
 export function createSmartReplyGenerator(): SmartReplyGenerator {
@@ -170,10 +179,10 @@ function buildSystemPrompt(styleGuide: string, extraContext: string | undefined,
     "如果回复需要依赖外部资料或实时状态，但上下文没有给出答案，直接承认当前没法确认，或者向对方要一个必要信息；不要承诺稍后查看或确认后再回。",
     "特别是天气、实时价格、实时进度、日程空闲等问题：如果上下文没有结果，不要说正在查询、马上查、稍等一下。",
     "聊天上下文里如果出现过自动回复、我在出差、请留言、稍后再聊等固定托管文案，不要模仿、不要复用。",
-    "对方只发 1、收到、好、ok、嗯这类短确认时，用一句自然短回复接住，例如“行，我看下”或“好，我确认下”。",
-    "回复长度默认 1 到 2 句。只有对方明确问复杂问题时才多说。可以用 | 分隔最多 3 条短消息，表示连续发送。",
+    "回复长度默认 1 句；只有对方明确问复杂问题时才 1 到 2 句。可以用 | 分隔最多 2 条短消息，表示连续发送。",
     "风格要求：",
     styleGuide,
+    `自评修正要求：\n${selfReviewStyleGuard}`,
     learnedStyle ? `从用户历史真实回复中学习到的风格画像：\n${learnedStyle}` : undefined,
     extraContext ? `补充背景：\n${extraContext}` : undefined
   ]
@@ -214,6 +223,12 @@ function stripWrappingQuotes(value: string): string {
 }
 
 function sanitizeSmartReply(reply: string, input: SmartReplyInput): string {
+  const cleanedReply = cleanupRoboticPhrasing(reply);
+
+  if (isShortAcknowledgement(input.incomingMessage) && inventsFollowUpWork(cleanedReply)) {
+    return shortAcknowledgementReply(input.incomingMessage);
+  }
+
   if (isRealtimeInfoQuestion(input.incomingMessage) && hasUnsupportedFollowUpPromise(reply)) {
     if (/(天气|下雨|降雨|气温|温度|台风|暴雨|空气质量|aqi)/i.test(input.incomingMessage)) {
       return "我这边没法直接看实时天气|你说下哪个城市，我按你发的情况帮你判断下";
@@ -222,14 +237,47 @@ function sanitizeSmartReply(reply: string, input: SmartReplyInput): string {
   }
 
   if (hasUnsupportedFollowUpPromise(reply)) {
-    return reply
+    return cleanedReply
       .replace(/我(去|来)?(查|翻|看|确认|核|问)(一下|下|一眼|一遍)?(天气|资料|文档|表格|状态|进度|日程)?[，,。.!！\s]*(稍等|等我下|一会儿?回你|晚点回你|确认后回你)?/g, "这个我现在没法直接确认")
       .replace(/(稍等|等我下|一会儿?回你|晚点回你|确认后回你)/g, "")
       .replace(/\s+/g, " ")
       .trim();
   }
 
-  return reply;
+  return cleanedReply;
+}
+
+function cleanupRoboticPhrasing(reply: string): string {
+  return reply
+    .replace(/^(嗯|好|好的|收到|了解|明白)[，,。\s]+(理解了[，,。\s]*)?/g, "")
+    .replace(/从我([^，。|]{0,18})角度来说[，,]?/g, "")
+    .replace(/从([^，。|]{0,18})角度来看[，,]?/g, "")
+    .replace(/我理解了[，,。\s]*/g, "")
+    .replace(/这个事情/g, "这个")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isShortAcknowledgement(text: string): boolean {
+  return /^(1|ok|okay|好|好的|可以|行|嗯|收到|明白|了解|没问题|nice|get|太行)[。！!\s]*$/i.test(text.trim());
+}
+
+function inventsFollowUpWork(reply: string): boolean {
+  return /(整理|流程|发你|发给你|记录|记一下|确认|对一下|回头|具体|校验方法|测试方法|我先|我去|我找)/.test(reply);
+}
+
+function shortAcknowledgementReply(incomingMessage: string): string {
+  const text = incomingMessage.trim().toLowerCase();
+  if (/^(可以|好|好的|ok|okay|行|没问题)$/.test(text)) {
+    return "nice!";
+  }
+  if (/^(收到|明白|了解|get)$/.test(text)) {
+    return "get";
+  }
+  if (/^(嗯|1)$/.test(text)) {
+    return "行";
+  }
+  return "可以";
 }
 
 function isRealtimeInfoQuestion(text: string): boolean {
