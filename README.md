@@ -70,6 +70,8 @@ LARK_AUTOREPLY_VERBOSE_SKIPPED_TARGETS=false
 
 所有自动发送的固定回复、AI 回复和工具跟进回复都会默认加上 `AR:` 前缀，用来和用户真人回复区分。这个前缀也会被智能上下文和风格学习脚本识别并跳过，避免把自动回复当成真人样本学习。如果确实要改前缀，可以设置 `LARK_AUTOREPLY_PREFIX`。
 
+风格学习和自评可以用 `npm run smart:learn`、`npm run smart:self-review`。自评脚本会读取学习样本或手工评测样本，生成候选回复，再用规则和 AI 评审打分，报告保存在 `.training/smart-reply-self-review.md` 和 `.training/smart-reply-self-review.json`。
+
 05 工程里的智能回复功能已经合并到同一个 04 进程里。默认 `LARK_AUTOREPLY_MODE=mixed`：`LARK_SMART_REPLY_TARGET_NAMES` 里的联系人走 AI 智能回复，其他被监听目标继续走固定文案。配置 OpenAI 兼容的 Chat Completions 接口后即可启用智能联系人回复：
 
 ```text

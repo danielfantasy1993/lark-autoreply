@@ -16,6 +16,7 @@
     "autoreply:ws": "tsx src/autoReplyWs.ts",
     "smart:learn": "tsx src/smartStyleLearn.ts",
     "smart:evaluate": "tsx src/smartReplyEval.ts",
+    "smart:self-review": "tsx src/smartSelfReview.ts",
     "oauth:login": "tsx src/oauthLogin.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit"

@@ -39,6 +39,39 @@ npm run smart:learn
 pm2 restart lark-autoreply --update-env
 ```
 
+### 自动自评闭环
+
+跑完学习后，可以让代理自己生成回复、自己打分并输出问题报告：
+
+```powershell
+cd E:\AI_Agent\04_Lark_Operating
+npm.cmd run smart:self-review
+```
+
+服务器上也可以跑：
+
+```bash
+cd ~/lark-autoreply
+npm run smart:self-review
+```
+
+它会优先读取 `.training/learned-reply-cases.json`，没有的话再读 `.training/smart-reply-cases.json`，然后生成：
+
+```text
+.training/smart-reply-self-review.json
+.training/smart-reply-self-review.md
+```
+
+报告里会包含每条样本的生成回复、自评分、问题标签、诊断和建议回复。默认会用同一个智能回复 API 做 AI 评审；如果只想用规则评审，可以配置：
+
+```text
+LARK_SELF_REVIEW_AI_JUDGE=false
+LARK_SELF_REVIEW_MAX_CASES=30
+LARK_SELF_REVIEW_PASS_SCORE=7
+```
+
+这个闭环当前会自动发现问题并写报告，但不会自动改代码或自动部署；低分案例需要人工确认后再调整提示词、工具逻辑或补样本。
+
 ### 手工补充评测样本
 
 1. 暂停服务器自动回复，避免测试时真实对外乱回：
@@ -77,6 +110,7 @@ npm.cmd run smart:evaluate
 ```powershell
 npm.cmd run build
 npm.cmd run smart:evaluate
+npm.cmd run smart:self-review
 ```
 
 6. 满意后提交代码、部署服务器：
