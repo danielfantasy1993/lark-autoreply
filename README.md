@@ -77,6 +77,7 @@ LARK_SMART_REPLY_API_KEY=sk_xxx
 LARK_SMART_REPLY_API_URL=https://api.openai.com/v1/chat/completions
 LARK_SMART_REPLY_MODEL=gpt-4o-mini
 LARK_SMART_REPLY_CONTEXT_SECONDS=86400
+LARK_SMART_REPLY_MAX_MESSAGES=3
 LARK_SMART_REPLY_STYLE=用中文自然简短回复，像我本人在飞书里随手打字；不确定就说我确认下再回。
 # LARK_SMART_REPLY_EXTRA_CONTEXT=我最近主要在处理 XXX 项目，语气直接但礼貌。
 ```
@@ -90,7 +91,7 @@ LARK_AUTOREPLY_MODE=mixed
 LARK_SMART_REPLY_TARGET_NAMES=李文贤,何运伟,external:李翔
 ```
 
-智能联系人每收到一条目标消息会读取最近一段聊天上下文，生成一条回复并发送；不会再按 `LARK_AUTOREPLY_TEXTS` 连续发送固定文案。`LARK_SMART_REPLY_CONTEXT_SECONDS` 控制用于生成回复的上下文时间范围，默认 24 小时。如果想所有目标都走固定文案，设置 `LARK_AUTOREPLY_MODE=fixed`；如果想所有目标都走 AI，设置 `LARK_AUTOREPLY_MODE=smart`。
+智能联系人每收到一条目标消息会读取最近一段聊天上下文，生成回复并发送；不会再按 `LARK_AUTOREPLY_TEXTS` 连续发送固定文案。智能回复可以用 `|` 分隔成最多 `LARK_SMART_REPLY_MAX_MESSAGES` 条短消息，默认最多 3 条，用来模拟真人连续发几句。`LARK_SMART_REPLY_CONTEXT_SECONDS` 控制用于生成回复的上下文时间范围，默认 24 小时。如果想所有目标都走固定文案，设置 `LARK_AUTOREPLY_MODE=fixed`；如果想所有目标都走 AI，设置 `LARK_AUTOREPLY_MODE=smart`。
 
 智能回复还可以读取本地飞书知识索引。先配置项目关键词、飞书文档链接或手动背景，再运行同步脚本：
 

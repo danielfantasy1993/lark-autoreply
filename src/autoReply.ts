@@ -158,6 +158,7 @@ const maxRateLimitBackoffMs = readPositiveInteger(process.env.LARK_AUTOREPLY_MAX
 const lookbackSeconds = readPositiveNumber(process.env.LARK_AUTOREPLY_LOOKBACK_SECONDS, 300);
 const contextLookbackSeconds = readPositiveNumber(process.env.LARK_SMART_REPLY_CONTEXT_SECONDS, 24 * 60 * 60);
 const maxSmartReplyContextMessages = readPositiveInteger(process.env.LARK_SMART_REPLY_MAX_CONTEXT_MESSAGES, 60);
+const maxSmartReplyMessages = Math.min(readPositiveInteger(process.env.LARK_SMART_REPLY_MAX_MESSAGES, 3), 3);
 const replyExisting = process.env.LARK_AUTOREPLY_REPLY_EXISTING === "true";
 const maxDepartmentUsers = readPositiveNumber(process.env.LARK_AUTOREPLY_MAX_DEPARTMENT_USERS, 1000);
 const maxDepartmentDepth = readPositiveNumber(process.env.LARK_AUTOREPLY_MAX_DEPARTMENT_DEPTH, 6);
@@ -356,7 +357,7 @@ async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: Au
       continue;
     }
 
-    const texts = useSmartReply && smartReply ? [await buildSmartReply(client, target, message, selfOpenId, endTime, smartReply)] : replyTexts;
+    const texts = useSmartReply && smartReply ? await buildSmartReplies(client, target, message, selfOpenId, endTime, smartReply) : replyTexts;
     const repliedBy = await sendAutoReply(client, botClient, target, texts, messageId);
     state.repliedMessageIds = [...(state.repliedMessageIds ?? []), messageId].slice(-200);
     state.lastReplyAtByChat = { ...(state.lastReplyAtByChat ?? {}), [target.chatId]: Date.now() };
@@ -443,11 +444,21 @@ async function sendAutoReply(client: LarkUserClient, botClient: LarkClient, targ
   }
 }
 
-async function buildSmartReply(client: LarkUserClient, target: ResolvedTarget, message: Message, selfOpenId: string | undefined, endTime: number, smartReply: SmartReplyGenerator): Promise<string> {
+async function buildSmartReplies(client: LarkUserClient, target: ResolvedTarget, message: Message, selfOpenId: string | undefined, endTime: number, smartReply: SmartReplyGenerator): Promise<string[]> {
   const incomingMessage = extractMessageText(message.msg_type, message.content ?? message.body?.content);
   const conversation = await readConversationContext(client, target, selfOpenId, endTime);
   const knowledge = knowledgeEnabled ? await searchKnowledgeForReply(incomingMessage, conversation) : [];
-  return smartReply({ targetName: target.name, incomingMessage, conversation, knowledge });
+  return splitSmartReplyTexts(await smartReply({ targetName: target.name, incomingMessage, conversation, knowledge }));
+}
+
+function splitSmartReplyTexts(reply: string): string[] {
+  const texts = reply
+    .split("|")
+    .map((text) => text.trim())
+    .filter(Boolean)
+    .slice(0, maxSmartReplyMessages);
+
+  return texts.length > 0 ? texts : [reply.trim()];
 }
 
 async function searchKnowledgeForReply(incomingMessage: string, conversation: SmartReplyConversationMessage[]) {
