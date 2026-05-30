@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 
 export type KnowledgeItem = {
   id: string;
-  source: "message" | "doc" | "sheet" | "manual";
+  source: "message" | "doc" | "sheet" | "mail" | "manual";
   title: string;
   content: string;
   url?: string;

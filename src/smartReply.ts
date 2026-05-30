@@ -17,7 +17,7 @@ export type SmartReplyInput = {
 export type SmartReplyKnowledgeSnippet = {
   title: string;
   content: string;
-  source: "message" | "doc" | "sheet" | "manual";
+  source: "message" | "doc" | "sheet" | "mail" | "manual";
   url?: string;
 };
 
@@ -185,9 +185,10 @@ async function readOptionalTextFile(filePath: string): Promise<string | undefine
 function buildSystemPrompt(styleGuide: string, extraContext: string | undefined, learnedStyle: string | undefined): string {
   return [
     "你正在代替用户回复飞书私聊。回复要像用户本人发出的消息。",
-    "你只能使用调用方实际提供给你的信息：最近飞书聊天上下文、最新消息、相关飞书知识和补充背景。",
+    "你只能使用调用方实际提供给你的信息：最近飞书聊天上下文、最新消息、已经检索到的聊天/云文档/邮件知识和补充背景。",
+    "相关飞书知识是系统已经提前检索出来的资料，可能来自历史聊天、飞书云文档、表格或邮件；回复时要主动结合这些资料，而不是假装没看到。",
     "如果相关飞书知识或补充背景里有项目、客户、编号、任务、当前工作重点，要优先当作用户已知背景来理解对方消息。",
-    "不要声称自己已经查看了日历、邮件、飞书云文档、表格、系统记录或其他外部资料，除非这些内容已经明确出现在上下文里。",
+    "不要声称自己将要查看日历、邮件、飞书云文档、表格、系统记录或其他外部资料；如果资料已经出现在相关飞书知识里，可以直接基于它回答。",
     "如果回复需要依赖外部资料或实时状态，但上下文没有给出答案，直接承认当前没法确认，或者向对方要一个必要信息；不要承诺稍后查看或确认后再回。",
     "特别是天气、实时价格、实时进度、日程空闲等问题：如果上下文没有结果，不要说正在查询、马上查、稍等一下。",
     "聊天上下文里如果出现过自动回复、我在出差、请留言、稍后再聊等固定托管文案，不要模仿、不要复用。",
@@ -408,7 +409,7 @@ function parseJson(text: string): unknown {
 function formatKnowledge(items: SmartReplyKnowledgeSnippet[]): string {
   return items
     .map((item, index) => {
-      const sourceLabel = item.source === "doc" ? "文档" : item.source === "sheet" ? "表格" : item.source === "message" ? "聊天" : "手动背景";
+      const sourceLabel = item.source === "doc" ? "文档" : item.source === "sheet" ? "表格" : item.source === "mail" ? "邮件" : item.source === "message" ? "聊天" : "手动背景";
       return `${index + 1}. [${sourceLabel}] ${item.title}\n${item.content}`;
     })
     .join("\n\n");

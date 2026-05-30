@@ -12,6 +12,8 @@ loadDotEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") }
 type ApiList<T> = {
   data?: {
     items?: T[];
+    has_more?: boolean;
+    page_token?: string;
   };
 };
 
@@ -23,6 +25,33 @@ type Message = {
   body?: {
     content?: string;
   };
+};
+
+type Mailbox = {
+  id?: string;
+  mailbox_id?: string;
+  user_mailbox_id?: string;
+  email?: string;
+  name?: string;
+};
+
+type MailMessage = {
+  id?: string;
+  message_id?: string;
+  subject?: string;
+  from?: unknown;
+  to?: unknown;
+  cc?: unknown;
+  body?: unknown;
+  content?: unknown;
+  body_plain_text?: string;
+  body_html?: string;
+  snippet?: string;
+  summary?: string;
+  sent_at?: string | number;
+  received_at?: string | number;
+  created_at?: string | number;
+  updated_at?: string | number;
 };
 
 type TargetState = {
@@ -85,6 +114,7 @@ const syncDays = readPositiveNumber(process.env.LARK_KNOWLEDGE_SYNC_DAYS, 30);
 const maxChats = readPositiveInteger(process.env.LARK_KNOWLEDGE_MAX_CHATS, 120);
 const maxMessagesPerChat = readPositiveInteger(process.env.LARK_KNOWLEDGE_MAX_MESSAGES_PER_CHAT, 50);
 const includeAllMonitoredChats = process.env.LARK_KNOWLEDGE_SYNC_MONITORED_CHATS !== "false";
+const syncAllChatMessages = process.env.LARK_KNOWLEDGE_SYNC_ALL_CHAT_MESSAGES !== "false";
 const syncCloudSearch = process.env.LARK_KNOWLEDGE_SEARCH_CLOUD_DOCS !== "false";
 const cloudSearchPageSize = readPositiveInteger(process.env.LARK_KNOWLEDGE_SEARCH_PAGE_SIZE, 20);
 const cloudSearchMaxPages = readPositiveInteger(process.env.LARK_KNOWLEDGE_SEARCH_MAX_PAGES, 3);
@@ -92,6 +122,10 @@ const cloudSearchDataTypes = readList(process.env.LARK_KNOWLEDGE_SEARCH_TYPES ||
 const cloudSearchOwnerIds = readList(process.env.LARK_KNOWLEDGE_OWNER_IDS || process.env.LARK_KNOWLEDGE_CREATOR_IDS);
 const cloudSearchRequiredScopes = ["search:docs:read", "drive:drive:readonly", "drive:drive", "drive:drive.search:readonly"];
 const docsContentRequiredScopes = ["docs:document.content:read"];
+const syncMail = process.env.LARK_KNOWLEDGE_SYNC_MAIL !== "false";
+const mailDays = readPositiveNumber(process.env.LARK_KNOWLEDGE_MAIL_DAYS, syncDays);
+const mailMaxMessages = readPositiveInteger(process.env.LARK_KNOWLEDGE_MAIL_MAX_MESSAGES, 300);
+const mailRequiredScopes = ["mail:user_mailbox:readonly", "mail:mail:readonly", "mail:message:readonly"];
 let canReadDocsContent: boolean | undefined;
 
 async function main(): Promise<void> {
@@ -109,18 +143,24 @@ async function main(): Promise<void> {
   if (includeAllMonitoredChats) {
     items.push(...(await syncMonitoredChatItems(client)));
   }
+  if (syncMail) {
+    if (!(await hasAnyRequiredUserScope(mailRequiredScopes))) {
+      console.warn(`Mail sync warning: saved user token scope does not list any of ${mailRequiredScopes.join(", ")}. Trying the API anyway; if it fails, add Feishu mail read scopes and run oauth:login again.`);
+    }
+    items.push(...(await syncMailItems(client)));
+  }
 
   await saveKnowledgeIndex(indexFile, items);
   console.log(`Knowledge sync complete: ${items.length} item(s) saved to ${indexFile}.`);
   if (items.length === 0) {
-    console.log("No knowledge items were collected. Add LARK_KNOWLEDGE_DOC_URLS or make sure monitored chats contain LARK_KNOWLEDGE_KEYWORDS.");
+    console.log("No knowledge items were collected. Add LARK_KNOWLEDGE_DOC_URLS or check chat/doc/mail permissions.");
   }
 }
 
 async function syncCloudSearchItems(client: LarkUserClient): Promise<KnowledgeItem[]> {
   const items: KnowledgeItem[] = [];
   const seen = new Set<string>();
-  const searchTerms = readList(process.env.LARK_KNOWLEDGE_SEARCH_KEYS).length > 0 ? readList(process.env.LARK_KNOWLEDGE_SEARCH_KEYS) : keywords;
+  const searchTerms = readList(process.env.LARK_KNOWLEDGE_SEARCH_KEYS).length > 0 ? readList(process.env.LARK_KNOWLEDGE_SEARCH_KEYS) : buildCloudSearchTerms();
   if (searchTerms.length === 0) {
     console.warn("Cloud doc search skipped: search_key is required. Set LARK_KNOWLEDGE_KEYWORDS or LARK_KNOWLEDGE_SEARCH_KEYS.");
     return [];
@@ -340,8 +380,11 @@ async function syncMonitoredChatItems(client: LarkUserClient): Promise<Knowledge
       const messages = await listMessages(client, target.chatId, startTime, endTime);
       for (const message of messages.slice(-maxMessagesPerChat)) {
         const text = extractMessageText(message.msg_type, message.content ?? message.body?.content);
+        if (!text || isDelegatedAutoReplyText(text)) {
+          continue;
+        }
         const matchedKeywords = matchKeywords(text, keywords);
-        if (matchedKeywords.length === 0) {
+        if (!syncAllChatMessages && matchedKeywords.length === 0) {
           continue;
         }
         items.push({
@@ -363,19 +406,143 @@ async function syncMonitoredChatItems(client: LarkUserClient): Promise<Knowledge
 }
 
 async function listMessages(client: LarkUserClient, chatId: string, startTime: number, endTime: number): Promise<Message[]> {
-  const response = await client.request<ApiList<Message>>({
-    method: "GET",
-    path: "/open-apis/im/v1/messages",
-    query: {
-      container_id_type: "chat",
-      container_id: chatId,
-      start_time: startTime,
-      end_time: endTime,
-      sort_type: "ByCreateTimeAsc",
-      page_size: 50
+  const messages: Message[] = [];
+  let pageToken: string | undefined;
+  do {
+    const response = await client.request<ApiList<Message>>({
+      method: "GET",
+      path: "/open-apis/im/v1/messages",
+      query: {
+        container_id_type: "chat",
+        container_id: chatId,
+        start_time: startTime,
+        end_time: endTime,
+        sort_type: "ByCreateTimeAsc",
+        page_size: 50,
+        page_token: pageToken
+      }
+    });
+    messages.push(...(response.data?.items ?? []));
+    pageToken = response.data?.page_token;
+  } while (pageToken && messages.length < maxMessagesPerChat);
+  return messages;
+}
+
+async function syncMailItems(client: LarkUserClient): Promise<KnowledgeItem[]> {
+  const mailboxes = await listMailboxes(client).catch((error) => {
+    console.warn(`Could not list Feishu mailboxes: ${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  });
+  const items: KnowledgeItem[] = [];
+  const endTime = Math.floor(Date.now() / 1000);
+  const startTime = Math.max(0, endTime - mailDays * 86400);
+
+  for (const mailbox of mailboxes) {
+    const mailboxId = mailbox.user_mailbox_id ?? mailbox.mailbox_id ?? mailbox.id;
+    if (!mailboxId) {
+      continue;
     }
+    const messages = await listMailMessages(client, mailboxId, startTime, endTime).catch((error) => {
+      console.warn(`Could not sync mailbox ${mailbox.email ?? mailbox.name ?? mailboxId}: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    });
+    for (const message of messages.slice(-mailMaxMessages)) {
+      const content = formatMailMessage(message).trim();
+      if (!content) {
+        continue;
+      }
+      const messageId = message.message_id ?? message.id ?? shortStableId(content);
+      items.push({
+        id: `mail:${mailboxId}:${messageId}`,
+        source: "mail",
+        title: `邮件：${message.subject?.trim() || "无主题"}`,
+        content,
+        createdAt: readFlexibleTime(message.received_at ?? message.sent_at ?? message.created_at),
+        updatedAt: readFlexibleTime(message.updated_at ?? message.received_at ?? message.sent_at),
+        keywords: matchKeywords(content, keywords)
+      });
+    }
+    await delay(readPositiveInteger(process.env.LARK_KNOWLEDGE_SYNC_DELAY_MS, 120));
+  }
+
+  if (items.length > 0) {
+    console.log(`Mail sync collected ${items.length} item(s).`);
+  }
+  return items;
+}
+
+async function listMailboxes(client: LarkUserClient): Promise<Mailbox[]> {
+  const response = await client.request<ApiList<Mailbox>>({
+    method: "GET",
+    path: "/open-apis/mail/v1/user_mailboxes",
+    query: { page_size: 50 }
   });
   return response.data?.items ?? [];
+}
+
+async function listMailMessages(client: LarkUserClient, mailboxId: string, startTime: number, endTime: number): Promise<MailMessage[]> {
+  const messages: MailMessage[] = [];
+  let pageToken: string | undefined;
+  do {
+    const response = await client.request<ApiList<MailMessage>>({
+      method: "GET",
+      path: `/open-apis/mail/v1/user_mailboxes/${encodeURIComponent(mailboxId)}/messages`,
+      query: {
+        page_size: 50,
+        page_token: pageToken,
+        start_time: startTime,
+        end_time: endTime
+      }
+    });
+    messages.push(...(response.data?.items ?? []));
+    pageToken = response.data?.page_token;
+  } while (pageToken && messages.length < mailMaxMessages);
+  return messages;
+}
+
+function formatMailMessage(message: MailMessage): string {
+  const body = readString(message.body_plain_text) ?? readString(message.snippet) ?? readString(message.summary) ?? readString(message.body_html) ?? stringifyMailField(message.body) ?? stringifyMailField(message.content);
+  return [
+    message.subject ? `主题：${message.subject}` : undefined,
+    stringifyMailField(message.from) ? `发件人：${stringifyMailField(message.from)}` : undefined,
+    stringifyMailField(message.to) ? `收件人：${stringifyMailField(message.to)}` : undefined,
+    body
+  ].filter(Boolean).join("\n");
+}
+
+function stringifyMailField(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (Array.isArray(value)) {
+    return value.map(stringifyMailField).filter(Boolean).join(", ") || undefined;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  return readString(record.email) ?? readString(record.address) ?? readString(record.name) ?? readString(record.text) ?? readString(record.content) ?? JSON.stringify(record);
+}
+
+function readFlexibleTime(value: string | number | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const numberValue = Number(value);
+  if (Number.isFinite(numberValue)) {
+    return numberValue > 10_000_000_000 ? Math.floor(numberValue / 1000) : numberValue;
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : undefined;
+}
+
+function buildCloudSearchTerms(): string[] {
+  return [...new Set([...keywords, ...readList(process.env.LARK_KNOWLEDGE_EXTRA_SEARCH_KEYS)])].filter(Boolean);
+}
+
+function isDelegatedAutoReplyText(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.endsWith("ᵃʳ") || /^AR:/i.test(trimmed) || /自动回复|请留言|我现在不在/.test(trimmed);
 }
 
 async function loadState(): Promise<AutoReplyState> {
