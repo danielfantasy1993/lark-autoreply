@@ -555,20 +555,33 @@ async function buildSmartReplies(client: LarkUserClient, target: ResolvedTarget,
 
 async function trySendRealtimeWeatherReply(client: LarkUserClient, botClient: LarkClient, state: AutoReplyState, target: ResolvedTarget, incomingMessage: string, sourceMessageId: string): Promise<"user" | "bot" | undefined> {
   const hasPendingWeatherRequest = Boolean(state.pendingWeatherByChat?.[target.chatId] && Date.now() - state.pendingWeatherByChat[target.chatId].requestedAt < 10 * 60 * 1000);
-  if (!realtimeWeatherEnabled || (!isWeatherRequest(incomingMessage) && !hasPendingWeatherRequest)) {
+  if (!realtimeWeatherEnabled) {
     return undefined;
   }
 
-  const location = buildWeatherLocationCandidate(extractWeatherLocation(incomingMessage) ?? (isWeatherRequest(incomingMessage) ? realtimeWeatherDefaultLocation : undefined));
+  if (isNegatedWeatherRequest(incomingMessage)) {
+    clearPendingWeatherRequest(state, target.chatId);
+    return undefined;
+  }
+
+  const weatherRequest = isWeatherRequest(incomingMessage);
+  if (!weatherRequest && !hasPendingWeatherRequest) {
+    return undefined;
+  }
+
+  const extractedLocation = extractWeatherLocation(incomingMessage) ?? (hasPendingWeatherRequest ? extractStandaloneWeatherLocation(incomingMessage) : undefined);
+  if (!weatherRequest && hasPendingWeatherRequest && !extractedLocation) {
+    clearPendingWeatherRequest(state, target.chatId);
+    return undefined;
+  }
+
+  const location = buildWeatherLocationCandidate(extractedLocation ?? (weatherRequest ? realtimeWeatherDefaultLocation : undefined));
   if (!location) {
     state.pendingWeatherByChat = { ...(state.pendingWeatherByChat ?? {}), [target.chatId]: { requestedAt: Date.now() } };
     return sendAutoReply(client, botClient, target, ["你问哪个城市的天气？"], sourceMessageId);
   }
 
-  if (state.pendingWeatherByChat?.[target.chatId]) {
-    const { [target.chatId]: _removed, ...rest } = state.pendingWeatherByChat;
-    state.pendingWeatherByChat = rest;
-  }
+  clearPendingWeatherRequest(state, target.chatId);
 
   const repliedBy = await sendAutoReply(client, botClient, target, [`我看下${location.label}天气`], sourceMessageId);
   const lookupStartedAt = Date.now();
@@ -579,6 +592,14 @@ async function trySendRealtimeWeatherReply(client: LarkUserClient, botClient: La
   await delay(Math.max(0, realtimeReplyDelayMs - (Date.now() - lookupStartedAt)));
   await sendAutoReply(client, botClient, target, splitSmartReplyTexts(weatherText), sourceMessageId, 1);
   return repliedBy;
+}
+
+function clearPendingWeatherRequest(state: AutoReplyState, chatId: string): void {
+  if (!state.pendingWeatherByChat?.[chatId]) {
+    return;
+  }
+  const { [chatId]: _removed, ...rest } = state.pendingWeatherByChat;
+  state.pendingWeatherByChat = rest;
 }
 
 async function buildWeatherReplyText(location: WeatherLocationCandidate): Promise<string> {
@@ -676,15 +697,39 @@ function isWeatherRequest(text: string): boolean {
   return /(天气|气温|温度|下雨|降雨|暴雨|台风|空气质量|aqi)/i.test(text);
 }
 
+function isNegatedWeatherRequest(text: string): boolean {
+  return /(没(有)?在?说天气|不是(说|问)?天气|不(是)?问天气|没问天气|不是查天气|别查天气|不用查天气)/.test(text.replace(/\s+/g, ""));
+}
+
 function extractWeatherLocation(text: string): string | undefined {
   const compactText = text.replace(/\s+/g, "");
   const knownLocation = knownWeatherLocations.find((location) => compactText.includes(location));
   if (knownLocation) {
     return knownLocation;
   }
+  const aliasLocation = Object.keys(weatherLocationAliases).find((location) => compactText.includes(location));
+  if (aliasLocation) {
+    return aliasLocation;
+  }
 
   const beforeKeyword = compactText.match(/([\u4e00-\u9fa5A-Za-z·.-]{2,24})(?:的)?(?:天气|气温|温度|下雨|降雨|暴雨|台风|空气质量|aqi)/i)?.[1];
   return cleanWeatherLocationCandidate(beforeKeyword);
+}
+
+function extractStandaloneWeatherLocation(text: string): string | undefined {
+  const compactText = text.replace(/[\s，,。.!！?？]/g, "");
+  if (!compactText || compactText.length > 16 || isWeatherRequest(compactText)) {
+    return undefined;
+  }
+
+  const normalizedText = compactText.replace(/市$/, "");
+  if (knownWeatherLocations.includes(normalizedText) || weatherLocationAliases[normalizedText] || weatherGeoByLocation[normalizedText]) {
+    return normalizedText;
+  }
+  if (/^[\u4e00-\u9fa5A-Za-z·.-]{2,24}$/.test(normalizedText) && !/(看不懂|表情|没有|不是|你|我|他|她|它|这|那|什么|怎么|为啥|脑子|坏了)/.test(normalizedText)) {
+    return normalizedText;
+  }
+  return undefined;
 }
 
 function buildWeatherLocationCandidate(location: string | undefined): WeatherLocationCandidate | undefined {
