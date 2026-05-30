@@ -77,6 +77,7 @@ type AutoReplyState = {
   lastCheckedAt?: number;
   repliedMessageIds?: string[];
   lastReplyAtByChat?: Record<string, number>;
+  pendingWeatherByChat?: Record<string, { requestedAt: number }>;
   targets?: Record<string, TargetState>;
 };
 
@@ -138,6 +139,15 @@ type FixedReplySuppressWindow = {
   endMinute: number;
 };
 
+type WeatherLookupResult = {
+  location: string;
+  description: string;
+  tempC?: string;
+  feelsLikeC?: string;
+  humidity?: string;
+  windKmph?: string;
+};
+
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tokenFile = resolvePath(process.env.LARK_USER_TOKEN_FILE || ".lark-user-token.json");
 const stateFile = resolvePath(process.env.LARK_AUTOREPLY_STATE_FILE || ".lark-auto-reply-state.json");
@@ -149,6 +159,30 @@ const replyMode = readReplyMode();
 const replyTexts = readReplyTexts();
 const fixedReplySuppressWindowsEnabled = process.env.LARK_AUTOREPLY_FIXED_REPLY_SUPPRESS_WINDOWS_ENABLED === "true";
 const fixedReplySuppressWindows = readFixedReplySuppressWindows();
+const knownWeatherLocations = [
+  "深圳",
+  "广州",
+  "东莞",
+  "佛山",
+  "惠州",
+  "中山",
+  "珠海",
+  "上海",
+  "北京",
+  "杭州",
+  "南京",
+  "苏州",
+  "成都",
+  "重庆",
+  "武汉",
+  "西安",
+  "长沙",
+  "厦门",
+  "福州",
+  "香港",
+  "澳门",
+  "台北"
+];
 const pollIntervalMs = readPollIntervalMs();
 const pollConcurrency = readPositiveInteger(process.env.LARK_AUTOREPLY_POLL_CONCURRENCY, 10);
 const priorityPollConcurrency = readPositiveInteger(process.env.LARK_AUTOREPLY_PRIORITY_POLL_CONCURRENCY, Math.min(pollConcurrency, 5));
@@ -159,6 +193,9 @@ const lookbackSeconds = readPositiveNumber(process.env.LARK_AUTOREPLY_LOOKBACK_S
 const contextLookbackSeconds = readPositiveNumber(process.env.LARK_SMART_REPLY_CONTEXT_SECONDS, 24 * 60 * 60);
 const maxSmartReplyContextMessages = readPositiveInteger(process.env.LARK_SMART_REPLY_MAX_CONTEXT_MESSAGES, 60);
 const maxSmartReplyMessages = Math.min(readPositiveInteger(process.env.LARK_SMART_REPLY_MAX_MESSAGES, 3), 3);
+const realtimeWeatherEnabled = process.env.LARK_REALTIME_WEATHER_ENABLED !== "false";
+const realtimeWeatherDefaultLocation = process.env.LARK_REALTIME_WEATHER_DEFAULT_LOCATION?.trim();
+const realtimeReplyDelayMs = readNonNegativeInteger(process.env.LARK_REALTIME_REPLY_DELAY_MS, 1800);
 const replyExisting = process.env.LARK_AUTOREPLY_REPLY_EXISTING === "true";
 const maxDepartmentUsers = readPositiveNumber(process.env.LARK_AUTOREPLY_MAX_DEPARTMENT_USERS, 1000);
 const maxDepartmentDepth = readPositiveNumber(process.env.LARK_AUTOREPLY_MAX_DEPARTMENT_DEPTH, 6);
@@ -357,8 +394,10 @@ async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: Au
       continue;
     }
 
-    const texts = useSmartReply && smartReply ? await buildSmartReplies(client, target, message, selfOpenId, endTime, smartReply) : replyTexts;
-    const repliedBy = await sendAutoReply(client, botClient, target, texts, messageId);
+    const incomingMessage = extractMessageText(message.msg_type, message.content ?? message.body?.content);
+    const realtimeRepliedBy = useSmartReply ? await trySendRealtimeWeatherReply(client, botClient, state, target, incomingMessage, messageId) : undefined;
+    const texts = realtimeRepliedBy ? [] : useSmartReply && smartReply ? await buildSmartReplies(client, target, incomingMessage, selfOpenId, endTime, smartReply) : replyTexts;
+    const repliedBy = realtimeRepliedBy ?? await sendAutoReply(client, botClient, target, texts, messageId);
     state.repliedMessageIds = [...(state.repliedMessageIds ?? []), messageId].slice(-200);
     state.lastReplyAtByChat = { ...(state.lastReplyAtByChat ?? {}), [target.chatId]: Date.now() };
     console.log(`Replied to ${target.name} message ${messageId} as ${repliedBy}.`);
@@ -420,17 +459,17 @@ async function sendBotTextMessage(client: LarkClient, openId: string, text: stri
   });
 }
 
-async function sendAutoReply(client: LarkUserClient, botClient: LarkClient, target: ResolvedTarget, texts: string[], sourceMessageId: string): Promise<"user" | "bot"> {
+async function sendAutoReply(client: LarkUserClient, botClient: LarkClient, target: ResolvedTarget, texts: string[], sourceMessageId: string, replyIndexOffset = 0): Promise<"user" | "bot"> {
   if (target.isExternal) {
     for (const [index, text] of texts.entries()) {
-      await sendBotTextMessage(botClient, target.openId, text, sourceMessageId, index);
+      await sendBotTextMessage(botClient, target.openId, text, sourceMessageId, index + replyIndexOffset);
     }
     return "bot";
   }
 
   try {
     for (const [index, text] of texts.entries()) {
-      await sendTextMessage(client, target.chatId, text, sourceMessageId, index);
+      await sendTextMessage(client, target.chatId, text, sourceMessageId, index + replyIndexOffset);
     }
     return "user";
   } catch (error) {
@@ -438,17 +477,88 @@ async function sendAutoReply(client: LarkUserClient, botClient: LarkClient, targ
       throw error;
     }
     for (const [index, text] of texts.entries()) {
-      await sendBotTextMessage(botClient, target.openId, text, sourceMessageId, index);
+      await sendBotTextMessage(botClient, target.openId, text, sourceMessageId, index + replyIndexOffset);
     }
     return "bot";
   }
 }
 
-async function buildSmartReplies(client: LarkUserClient, target: ResolvedTarget, message: Message, selfOpenId: string | undefined, endTime: number, smartReply: SmartReplyGenerator): Promise<string[]> {
-  const incomingMessage = extractMessageText(message.msg_type, message.content ?? message.body?.content);
+async function buildSmartReplies(client: LarkUserClient, target: ResolvedTarget, incomingMessage: string, selfOpenId: string | undefined, endTime: number, smartReply: SmartReplyGenerator): Promise<string[]> {
   const conversation = await readConversationContext(client, target, selfOpenId, endTime);
   const knowledge = knowledgeEnabled ? await searchKnowledgeForReply(incomingMessage, conversation) : [];
   return splitSmartReplyTexts(await smartReply({ targetName: target.name, incomingMessage, conversation, knowledge }));
+}
+
+async function trySendRealtimeWeatherReply(client: LarkUserClient, botClient: LarkClient, state: AutoReplyState, target: ResolvedTarget, incomingMessage: string, sourceMessageId: string): Promise<"user" | "bot" | undefined> {
+  const hasPendingWeatherRequest = Boolean(state.pendingWeatherByChat?.[target.chatId] && Date.now() - state.pendingWeatherByChat[target.chatId].requestedAt < 10 * 60 * 1000);
+  if (!realtimeWeatherEnabled || (!isWeatherRequest(incomingMessage) && !hasPendingWeatherRequest)) {
+    return undefined;
+  }
+
+  const location = extractWeatherLocation(incomingMessage) ?? (isWeatherRequest(incomingMessage) ? realtimeWeatherDefaultLocation : undefined);
+  if (!location) {
+    state.pendingWeatherByChat = { ...(state.pendingWeatherByChat ?? {}), [target.chatId]: { requestedAt: Date.now() } };
+    return sendAutoReply(client, botClient, target, ["你问哪个城市的天气？"], sourceMessageId);
+  }
+
+  if (state.pendingWeatherByChat?.[target.chatId]) {
+    const { [target.chatId]: _removed, ...rest } = state.pendingWeatherByChat;
+    state.pendingWeatherByChat = rest;
+  }
+
+  const repliedBy = await sendAutoReply(client, botClient, target, [`我看下${location}天气`], sourceMessageId);
+  const lookupStartedAt = Date.now();
+  const weatherText = await buildWeatherReplyText(location).catch((error) => {
+    console.warn(`Could not lookup weather for ${location}: ${error instanceof Error ? error.message : String(error)}`);
+    return `${location}天气我这边没查出来|你先看下天气 App，更准一点`;
+  });
+  await delay(Math.max(0, realtimeReplyDelayMs - (Date.now() - lookupStartedAt)));
+  await sendAutoReply(client, botClient, target, splitSmartReplyTexts(weatherText), sourceMessageId, 1);
+  return repliedBy;
+}
+
+async function buildWeatherReplyText(location: string): Promise<string> {
+  const weather = await lookupWeather(location);
+  const parts = [
+    `${weather.location}现在${weather.description}`,
+    weather.tempC ? `${weather.tempC}℃` : undefined,
+    weather.feelsLikeC ? `体感${weather.feelsLikeC}℃` : undefined,
+    weather.humidity ? `湿度${weather.humidity}%` : undefined,
+    weather.windKmph ? `风速${weather.windKmph}km/h` : undefined
+  ].filter(Boolean);
+
+  return `${parts.join("，")}|你要出门的话还是看眼本地天气 App，临近预报更准`;
+}
+
+async function lookupWeather(location: string): Promise<WeatherLookupResult> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const url = `https://wttr.in/${encodeURIComponent(location)}?format=j1&lang=zh`;
+    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "lark-autoreply/0.1" } });
+    const responseText = await response.text();
+    if (!response.ok) {
+      throw new Error(`Weather API ${response.status}: ${responseText.slice(0, 200)}`);
+    }
+    const payload = parseJson(responseText) as Record<string, unknown>;
+    const current = readFirstObject(payload.current_condition);
+    if (!current) {
+      throw new Error(`Weather response missing current_condition: ${responseText.slice(0, 200)}`);
+    }
+    const nearestArea = readFirstObject(payload.nearest_area);
+    const areaName = readNestedValue(nearestArea?.areaName, "value") ?? location;
+    const description = readNestedValue(current.weatherDesc, "value") ?? "天气信息不完整";
+    return {
+      location: areaName,
+      description,
+      tempC: readString(current.temp_C),
+      feelsLikeC: readString(current.FeelsLikeC),
+      humidity: readString(current.humidity),
+      windKmph: readString(current.windspeedKmph)
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function splitSmartReplyTexts(reply: string): string[] {
@@ -459,6 +569,63 @@ function splitSmartReplyTexts(reply: string): string[] {
     .slice(0, maxSmartReplyMessages);
 
   return texts.length > 0 ? texts : [reply.trim()];
+}
+
+function isWeatherRequest(text: string): boolean {
+  return /(天气|气温|温度|下雨|降雨|暴雨|台风|空气质量|aqi)/i.test(text);
+}
+
+function extractWeatherLocation(text: string): string | undefined {
+  const compactText = text.replace(/\s+/g, "");
+  const knownLocation = knownWeatherLocations.find((location) => compactText.includes(location));
+  if (knownLocation) {
+    return knownLocation;
+  }
+
+  const beforeKeyword = compactText.match(/([\u4e00-\u9fa5A-Za-z·.-]{2,24})(?:的)?(?:天气|气温|温度|下雨|降雨|暴雨|台风|空气质量|aqi)/i)?.[1];
+  return cleanWeatherLocationCandidate(beforeKeyword);
+}
+
+function cleanWeatherLocationCandidate(value: string | undefined): string | undefined {
+  const candidate = value
+    ?.replace(/^(你能|能不能|可以|可不可以|帮我|给我|麻烦|帮忙|查一下|查下|看一下|看下|问一下|问下|想知道|今天|明天|现在|一下)+/g, "")
+    .replace(/(今天|明天|现在|一下|怎么样|如何|吗|呢|啊|呀)$/g, "")
+    .trim();
+
+  if (!candidate || candidate.length < 2) {
+    return undefined;
+  }
+  if (/^(天气|气温|温度|下雨|降雨|暴雨|台风|空气质量|aqi)$/i.test(candidate)) {
+    return undefined;
+  }
+  if (/(你能|帮我|给我|麻烦|查|看|问|想知道)/.test(candidate)) {
+    return undefined;
+  }
+  return candidate;
+}
+
+function readFirstObject(value: unknown): Record<string, unknown> | undefined {
+  return Array.isArray(value) && value[0] && typeof value[0] === "object" ? (value[0] as Record<string, unknown>) : undefined;
+}
+
+function readNestedValue(value: unknown, key: string): string | undefined {
+  const object = readFirstObject(value);
+  return object ? readString(object[key]) : undefined;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parseJson(text: string): unknown {
+  if (!text) {
+    return {};
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
 }
 
 async function searchKnowledgeForReply(incomingMessage: string, conversation: SmartReplyConversationMessage[]) {
