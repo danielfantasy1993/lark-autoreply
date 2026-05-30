@@ -370,7 +370,7 @@ async function main(): Promise<void> {
     console.log(`Knowledge retrieval enabled with ${knowledgeIndex.items.length} indexed item(s).`);
   }
   if (fullScanTargets.length > 0) {
-    console.log(`Priority polling every ${pollIntervalMs}ms for ${priorityTargets.length} smart target(s); full scan every ${fullPollIntervalMs}ms for ${fullScanTargets.length} fixed target(s). Press Ctrl+C to stop.`);
+    console.log(`Priority polling every ${pollIntervalMs}ms for ${priorityTargets.length} priority target(s); full scan every ${fullPollIntervalMs}ms for ${fullScanTargets.length} fixed target(s). Press Ctrl+C to stop.`);
   } else {
     console.log(`Polling every ${pollIntervalMs}ms with concurrency ${Math.min(priorityPollConcurrency, targets.length)}. Press Ctrl+C to stop.`);
   }
