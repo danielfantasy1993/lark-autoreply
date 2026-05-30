@@ -72,14 +72,22 @@ export class LarkUserClient {
   async request<T = unknown>(options: UserApiOptions): Promise<T> {
     const token = await this.getAccessToken();
     const url = this.buildUrl(options.path, options.query);
-    const response = await fetch(url, {
-      method: options.method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json; charset=utf-8"
-      },
-      body: options.body === undefined ? undefined : JSON.stringify(options.body)
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), readPositiveInteger(process.env.LARK_USER_API_TIMEOUT_MS, 15_000));
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: options.method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     const responseText = await response.text();
     const payload = parseJson(responseText) as { code?: number; msg?: string };
@@ -208,4 +216,9 @@ function parseJson(text: string): unknown {
   } catch {
     return { raw: text };
   }
+}
+
+function readPositiveInteger(value: string | undefined, fallback: number): number {
+  const numberValue = Number(value);
+  return Number.isInteger(numberValue) && numberValue > 0 ? numberValue : fallback;
 }
