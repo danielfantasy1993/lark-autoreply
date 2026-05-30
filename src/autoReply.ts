@@ -148,6 +148,17 @@ type WeatherLookupResult = {
   windKmph?: string;
 };
 
+type WeatherLocationCandidate = {
+  label: string;
+  queries: string[];
+};
+
+type WeatherGeo = {
+  name: string;
+  latitude: number;
+  longitude: number;
+};
+
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tokenFile = resolvePath(process.env.LARK_USER_TOKEN_FILE || ".lark-user-token.json");
 const stateFile = resolvePath(process.env.LARK_AUTOREPLY_STATE_FILE || ".lark-auto-reply-state.json");
@@ -183,6 +194,59 @@ const knownWeatherLocations = [
   "澳门",
   "台北"
 ];
+const weatherLocationAliases: Record<string, string[]> = {
+  松江: ["松江", "上海"],
+  浦东: ["浦东", "上海"],
+  徐汇: ["徐汇", "上海"],
+  闵行: ["闵行", "上海"],
+  宝山: ["宝山", "上海"],
+  嘉定: ["嘉定", "上海"],
+  青浦: ["青浦", "上海"],
+  南山: ["南山", "深圳"],
+  福田: ["福田", "深圳"],
+  宝安: ["宝安", "深圳"],
+  龙岗: ["龙岗", "深圳"],
+  龙华: ["龙华", "深圳"],
+  罗湖: ["罗湖", "深圳"],
+  天河: ["天河", "广州"],
+  番禺: ["番禺", "广州"],
+  黄埔: ["黄埔", "广州"]
+};
+const weatherGeoByLocation: Record<string, WeatherGeo> = {
+  上海: { name: "上海", latitude: 31.2304, longitude: 121.4737 },
+  Shanghai: { name: "上海", latitude: 31.2304, longitude: 121.4737 },
+  松江: { name: "上海松江", latitude: 31.0326, longitude: 121.2277 },
+  浦东: { name: "上海浦东", latitude: 31.2211, longitude: 121.5441 },
+  徐汇: { name: "上海徐汇", latitude: 31.1885, longitude: 121.4368 },
+  闵行: { name: "上海闵行", latitude: 31.1128, longitude: 121.3817 },
+  宝山: { name: "上海宝山", latitude: 31.4055, longitude: 121.4896 },
+  嘉定: { name: "上海嘉定", latitude: 31.3756, longitude: 121.2653 },
+  青浦: { name: "上海青浦", latitude: 31.1509, longitude: 121.1242 },
+  深圳: { name: "深圳", latitude: 22.5431, longitude: 114.0579 },
+  Shenzhen: { name: "深圳", latitude: 22.5431, longitude: 114.0579 },
+  南山: { name: "深圳南山", latitude: 22.5333, longitude: 113.9304 },
+  福田: { name: "深圳福田", latitude: 22.5229, longitude: 114.0556 },
+  宝安: { name: "深圳宝安", latitude: 22.5553, longitude: 113.8831 },
+  龙岗: { name: "深圳龙岗", latitude: 22.7209, longitude: 114.2469 },
+  龙华: { name: "深圳龙华", latitude: 22.6967, longitude: 114.0458 },
+  罗湖: { name: "深圳罗湖", latitude: 22.5483, longitude: 114.1316 },
+  广州: { name: "广州", latitude: 23.1291, longitude: 113.2644 },
+  Guangzhou: { name: "广州", latitude: 23.1291, longitude: 113.2644 },
+  北京: { name: "北京", latitude: 39.9042, longitude: 116.4074 },
+  杭州: { name: "杭州", latitude: 30.2741, longitude: 120.1551 },
+  南京: { name: "南京", latitude: 32.0603, longitude: 118.7969 },
+  苏州: { name: "苏州", latitude: 31.2989, longitude: 120.5853 },
+  成都: { name: "成都", latitude: 30.5728, longitude: 104.0668 },
+  重庆: { name: "重庆", latitude: 29.563, longitude: 106.5516 },
+  武汉: { name: "武汉", latitude: 30.5928, longitude: 114.3055 },
+  西安: { name: "西安", latitude: 34.3416, longitude: 108.9398 },
+  长沙: { name: "长沙", latitude: 28.2282, longitude: 112.9388 },
+  厦门: { name: "厦门", latitude: 24.4798, longitude: 118.0894 },
+  福州: { name: "福州", latitude: 26.0745, longitude: 119.2965 },
+  香港: { name: "香港", latitude: 22.3193, longitude: 114.1694 },
+  澳门: { name: "澳门", latitude: 22.1987, longitude: 113.5439 },
+  台北: { name: "台北", latitude: 25.033, longitude: 121.5654 }
+};
 const pollIntervalMs = readPollIntervalMs();
 const pollConcurrency = readPositiveInteger(process.env.LARK_AUTOREPLY_POLL_CONCURRENCY, 10);
 const priorityPollConcurrency = readPositiveInteger(process.env.LARK_AUTOREPLY_PRIORITY_POLL_CONCURRENCY, Math.min(pollConcurrency, 5));
@@ -495,7 +559,7 @@ async function trySendRealtimeWeatherReply(client: LarkUserClient, botClient: La
     return undefined;
   }
 
-  const location = extractWeatherLocation(incomingMessage) ?? (isWeatherRequest(incomingMessage) ? realtimeWeatherDefaultLocation : undefined);
+  const location = buildWeatherLocationCandidate(extractWeatherLocation(incomingMessage) ?? (isWeatherRequest(incomingMessage) ? realtimeWeatherDefaultLocation : undefined));
   if (!location) {
     state.pendingWeatherByChat = { ...(state.pendingWeatherByChat ?? {}), [target.chatId]: { requestedAt: Date.now() } };
     return sendAutoReply(client, botClient, target, ["你问哪个城市的天气？"], sourceMessageId);
@@ -506,18 +570,18 @@ async function trySendRealtimeWeatherReply(client: LarkUserClient, botClient: La
     state.pendingWeatherByChat = rest;
   }
 
-  const repliedBy = await sendAutoReply(client, botClient, target, [`我看下${location}天气`], sourceMessageId);
+  const repliedBy = await sendAutoReply(client, botClient, target, [`我看下${location.label}天气`], sourceMessageId);
   const lookupStartedAt = Date.now();
   const weatherText = await buildWeatherReplyText(location).catch((error) => {
-    console.warn(`Could not lookup weather for ${location}: ${error instanceof Error ? error.message : String(error)}`);
-    return `${location}天气我这边没查出来|你先看下天气 App，更准一点`;
+    console.warn(`Could not lookup weather for ${location.label}: ${error instanceof Error ? error.message : String(error)}`);
+    return `${location.label}天气我这边没查出来|你可以换成市名问我，比如上海、深圳这种`;
   });
   await delay(Math.max(0, realtimeReplyDelayMs - (Date.now() - lookupStartedAt)));
   await sendAutoReply(client, botClient, target, splitSmartReplyTexts(weatherText), sourceMessageId, 1);
   return repliedBy;
 }
 
-async function buildWeatherReplyText(location: string): Promise<string> {
+async function buildWeatherReplyText(location: WeatherLocationCandidate): Promise<string> {
   const weather = await lookupWeather(location);
   const parts = [
     `${weather.location}现在${weather.description}`,
@@ -530,31 +594,68 @@ async function buildWeatherReplyText(location: string): Promise<string> {
   return `${parts.join("，")}|你要出门的话还是看眼本地天气 App，临近预报更准`;
 }
 
-async function lookupWeather(location: string): Promise<WeatherLookupResult> {
+async function lookupWeather(location: WeatherLocationCandidate): Promise<WeatherLookupResult> {
+  let lastError: unknown;
+  for (const query of location.queries) {
+    try {
+      return await lookupWeatherQuery(query, location.label);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function lookupWeatherQuery(query: string, fallbackLabel: string): Promise<WeatherLookupResult> {
+  const geo = weatherGeoByLocation[query] ?? (await geocodeWeatherLocation(query));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {
-    const url = `https://wttr.in/${encodeURIComponent(location)}?format=j1&lang=zh`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.latitude}&longitude=${geo.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto`;
     const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "lark-autoreply/0.1" } });
     const responseText = await response.text();
     if (!response.ok) {
       throw new Error(`Weather API ${response.status}: ${responseText.slice(0, 200)}`);
     }
     const payload = parseJson(responseText) as Record<string, unknown>;
-    const current = readFirstObject(payload.current_condition);
+    const current = typeof payload.current === "object" && payload.current ? (payload.current as Record<string, unknown>) : undefined;
     if (!current) {
-      throw new Error(`Weather response missing current_condition: ${responseText.slice(0, 200)}`);
+      throw new Error(`Weather response missing current: ${responseText.slice(0, 200)}`);
     }
-    const nearestArea = readFirstObject(payload.nearest_area);
-    const areaName = readNestedValue(nearestArea?.areaName, "value") ?? location;
-    const description = readNestedValue(current.weatherDesc, "value") ?? "天气信息不完整";
     return {
-      location: areaName,
-      description,
-      tempC: readString(current.temp_C),
-      feelsLikeC: readString(current.FeelsLikeC),
-      humidity: readString(current.humidity),
-      windKmph: readString(current.windspeedKmph)
+      location: geo.name || fallbackLabel,
+      description: describeWeatherCode(readNumberValue(current.weather_code)),
+      tempC: readNumberText(current.temperature_2m),
+      feelsLikeC: readNumberText(current.apparent_temperature),
+      humidity: readNumberText(current.relative_humidity_2m),
+      windKmph: readNumberText(current.wind_speed_10m)
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function geocodeWeatherLocation(query: string): Promise<WeatherGeo> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=zh&format=json`;
+    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "lark-autoreply/0.1" } });
+    const responseText = await response.text();
+    if (!response.ok) {
+      throw new Error(`Weather geocoding API ${response.status}: ${responseText.slice(0, 200)}`);
+    }
+    const payload = parseJson(responseText) as Record<string, unknown>;
+    const result = readFirstObject(payload.results);
+    const latitude = readNumberValue(result?.latitude);
+    const longitude = readNumberValue(result?.longitude);
+    if (!result || latitude === undefined || longitude === undefined) {
+      throw new Error(`Weather geocoding found no result for ${query}`);
+    }
+    return {
+      name: readString(result.name) ?? query,
+      latitude,
+      longitude
     };
   } finally {
     clearTimeout(timeout);
@@ -586,6 +687,25 @@ function extractWeatherLocation(text: string): string | undefined {
   return cleanWeatherLocationCandidate(beforeKeyword);
 }
 
+function buildWeatherLocationCandidate(location: string | undefined): WeatherLocationCandidate | undefined {
+  if (!location) {
+    return undefined;
+  }
+
+  const aliasQueries = weatherLocationAliases[location];
+  if (aliasQueries) {
+    return { label: location, queries: uniqueStrings([location, ...aliasQueries]) };
+  }
+
+  const normalizedLocation = location.replace(/市$/, "");
+  const normalizedAliasQueries = weatherLocationAliases[normalizedLocation];
+  if (normalizedAliasQueries) {
+    return { label: location, queries: uniqueStrings([location, normalizedLocation, ...normalizedAliasQueries]) };
+  }
+
+  return { label: location, queries: uniqueStrings([location, normalizedLocation]) };
+}
+
 function cleanWeatherLocationCandidate(value: string | undefined): string | undefined {
   const candidate = value
     ?.replace(/^(你能|能不能|可以|可不可以|帮我|给我|麻烦|帮忙|查一下|查下|看一下|看下|问一下|问下|想知道|今天|明天|现在|一下)+/g, "")
@@ -615,6 +735,37 @@ function readNestedValue(value: unknown, key: string): string | undefined {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readNumberValue(value: unknown): number | undefined {
+  const numberValue = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isFinite(numberValue) ? numberValue : undefined;
+}
+
+function readNumberText(value: unknown): string | undefined {
+  const numberValue = readNumberValue(value);
+  return numberValue === undefined ? undefined : String(Math.round(numberValue));
+}
+
+function describeWeatherCode(code: number | undefined): string {
+  if (code === undefined) {
+    return "天气信息不完整";
+  }
+  if (code === 0) return "晴";
+  if ([1, 2].includes(code)) return "多云";
+  if (code === 3) return "阴";
+  if ([45, 48].includes(code)) return "有雾";
+  if ([51, 53, 55, 56, 57].includes(code)) return "有毛毛雨";
+  if ([61, 63, 65, 66, 67].includes(code)) return "有雨";
+  if ([71, 73, 75, 77].includes(code)) return "有雪";
+  if ([80, 81, 82].includes(code)) return "有阵雨";
+  if ([85, 86].includes(code)) return "有阵雪";
+  if ([95, 96, 99].includes(code)) return "有雷雨";
+  return "天气信息不完整";
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function parseJson(text: string): unknown {
