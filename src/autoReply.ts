@@ -1447,7 +1447,7 @@ function shouldRespondToIncomingMessage(message: Message, target: ResolvedTarget
     return false;
   }
 
-  if (target.targetType === "chat") {
+  if (isChatTarget(target)) {
     return isMentioningSelf(message, selfOpenId);
   }
 
@@ -1482,6 +1482,10 @@ function getMentionOpenId(mention: MessageMention): string | undefined {
     return mention.id_type === "open_id" ? mention.id : undefined;
   }
   return mention.id?.open_id;
+}
+
+function isChatTarget(target: ResolvedTarget): boolean {
+  return target.targetType === "chat" || target.source.startsWith("chat:") || target.key.startsWith("chat:");
 }
 
 function resolvePath(path: string): string {
@@ -1663,7 +1667,7 @@ function formatReplyModeLog(smartTargets: ResolvedTarget[]): string {
 }
 
 function formatTargetLabel(target: ResolvedTarget): string {
-  if (target.targetType === "chat") {
+  if (isChatTarget(target)) {
     return target.name;
   }
   return target.isExternal ? `${target.name} (external)` : target.name;
