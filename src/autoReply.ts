@@ -168,7 +168,7 @@ const smartReplyTargetNames = readNameList(process.env.LARK_SMART_REPLY_TARGET_N
 const excludedTargetNames = readNameList(process.env.LARK_AUTOREPLY_EXCLUDE_TARGET_NAMES, []);
 const replyMode = readReplyMode();
 const replyTexts = readReplyTexts();
-const autoReplyPrefix = process.env.LARK_AUTOREPLY_PREFIX ?? "AR:";
+const autoReplyMarker = readAutoReplyMarker();
 const fixedReplySuppressWindowsEnabled = process.env.LARK_AUTOREPLY_FIXED_REPLY_SUPPRESS_WINDOWS_ENABLED === "true";
 const fixedReplySuppressWindows = readFixedReplySuppressWindows();
 const knownWeatherLocations = [
@@ -526,16 +526,16 @@ async function sendBotTextMessage(client: LarkClient, openId: string, text: stri
 }
 
 async function sendAutoReply(client: LarkUserClient, botClient: LarkClient, target: ResolvedTarget, texts: string[], sourceMessageId: string, replyIndexOffset = 0): Promise<"user" | "bot"> {
-  const prefixedTexts = texts.map(formatAutoReplyText);
+  const markedTexts = texts.map(formatAutoReplyText);
   if (target.isExternal) {
-    for (const [index, text] of prefixedTexts.entries()) {
+    for (const [index, text] of markedTexts.entries()) {
       await sendBotTextMessage(botClient, target.openId, text, sourceMessageId, index + replyIndexOffset);
     }
     return "bot";
   }
 
   try {
-    for (const [index, text] of prefixedTexts.entries()) {
+    for (const [index, text] of markedTexts.entries()) {
       await sendTextMessage(client, target.chatId, text, sourceMessageId, index + replyIndexOffset);
     }
     return "user";
@@ -543,7 +543,7 @@ async function sendAutoReply(client: LarkUserClient, botClient: LarkClient, targ
     if (!isExternalChatPermissionError(error)) {
       throw error;
     }
-    for (const [index, text] of prefixedTexts.entries()) {
+    for (const [index, text] of markedTexts.entries()) {
       await sendBotTextMessage(botClient, target.openId, text, sourceMessageId, index + replyIndexOffset);
     }
     return "bot";
@@ -552,10 +552,10 @@ async function sendAutoReply(client: LarkUserClient, botClient: LarkClient, targ
 
 function formatAutoReplyText(text: string): string {
   const trimmedText = text.trim();
-  if (!autoReplyPrefix) {
+  if (!autoReplyMarker) {
     return trimmedText;
   }
-  return trimmedText.startsWith(autoReplyPrefix) ? trimmedText : `${autoReplyPrefix} ${trimmedText}`;
+  return isMarkedAutoReplyText(trimmedText) ? trimmedText : `${trimmedText} ${autoReplyMarker}`;
 }
 
 async function buildSmartReplies(client: LarkUserClient, target: ResolvedTarget, incomingMessage: string, selfOpenId: string | undefined, endTime: number, smartReply: SmartReplyGenerator): Promise<string[]> {
@@ -875,7 +875,7 @@ async function readConversationContext(client: LarkUserClient, target: ResolvedT
 }
 
 function isDelegatedAutoReplyText(text: string): boolean {
-  if (autoReplyPrefix && text.trim().startsWith(autoReplyPrefix)) {
+  if (isMarkedAutoReplyText(text)) {
     return true;
   }
 
@@ -885,6 +885,11 @@ function isDelegatedAutoReplyText(text: string): boolean {
   }
 
   return ["机器人", "我在出差", "请留言", "稍后再聊", "自动回复"].some((phrase) => normalizedText.includes(phrase));
+}
+
+function isMarkedAutoReplyText(text: string): boolean {
+  const trimmedText = text.trim();
+  return Boolean((autoReplyMarker && trimmedText.endsWith(` ${autoReplyMarker}`)) || trimmedText.startsWith("AR:"));
 }
 
 async function getSelfOpenId(client: LarkUserClient): Promise<string | undefined> {
@@ -1301,6 +1306,15 @@ function resolvePath(path: string): string {
 function readPositiveNumber(value: string | undefined, fallback: number): number {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : fallback;
+}
+
+function readAutoReplyMarker(): string {
+  const configuredMarker = process.env.LARK_AUTOREPLY_MARKER ?? process.env.LARK_AUTOREPLY_PREFIX;
+  const marker = configuredMarker?.trim();
+  if (!marker || marker === "AR:") {
+    return "ar";
+  }
+  return marker;
 }
 
 function readPositiveInteger(value: string | undefined, fallback: number): number {

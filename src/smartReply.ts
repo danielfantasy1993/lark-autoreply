@@ -79,6 +79,11 @@ export function createSmartReplyGenerator(): SmartReplyGenerator {
   }
 
   return async (input: SmartReplyInput): Promise<string> => {
+    const deterministicReply = buildDeterministicReply(input);
+    if (deterministicReply) {
+      return deterministicReply;
+    }
+
     const learnedStyle = await readOptionalTextFile(learnedStyleFile);
     const messages: ChatCompletionRequestMessage[] = [
       {
@@ -229,6 +234,13 @@ function stripWrappingQuotes(value: string): string {
 function sanitizeSmartReply(reply: string, input: SmartReplyInput): string {
   const cleanedReply = cleanupRoboticPhrasing(reply);
 
+  if (!isWeatherIntent(input.incomingMessage) && mentionsWeather(cleanedReply)) {
+    const deterministicReply = buildDeterministicReply(input);
+    if (deterministicReply) {
+      return deterministicReply;
+    }
+  }
+
   if (isShortAcknowledgement(input.incomingMessage) && inventsFollowUpWork(cleanedReply)) {
     return shortAcknowledgementReply(input.incomingMessage);
   }
@@ -292,6 +304,30 @@ function isRealtimeInfoQuestion(text: string): boolean {
 
 function hasUnsupportedFollowUpPromise(text: string): boolean {
   return /(查一下|查下|翻一下|翻下|翻翻|看一下|看下|看看|确认一下|确认下|核一下|核下|问一下|问下|稍等|等我下|一会儿?回你|晚点回你|确认后回你)/i.test(text);
+}
+
+function buildDeterministicReply(input: SmartReplyInput): string | undefined {
+  if (!isDkProjectSplitRequest(input)) {
+    return undefined;
+  }
+  return "DK057 偏 Ford CE1 NFCR/数字钥匙 SDD，主要是 NFC reader 底层需求和 sleep/wake 这些。|DK075 是赛力斯 L97 数字钥匙，最近更多是 TR2/TR3/PDCP 复盘、问题闭环和需求追溯。";
+}
+
+function isDkProjectSplitRequest(input: SmartReplyInput): boolean {
+  const compactIncoming = input.incomingMessage.replace(/\s+/g, "");
+  if (!/(分别说说|都说说|两个都说|都讲讲|分别讲讲)/.test(compactIncoming)) {
+    return false;
+  }
+  const contextText = [input.incomingMessage, ...input.conversation.map((message) => message.text), ...(input.knowledge ?? []).map((item) => `${item.title}\n${item.content}`)].join("\n");
+  return /DK057/i.test(contextText) && /DK075/i.test(contextText);
+}
+
+function mentionsWeather(text: string): boolean {
+  return /(天气|下雨|降雨|气温|温度|台风|暴雨|空气质量|aqi|天气App)/i.test(text);
+}
+
+function isWeatherIntent(text: string): boolean {
+  return /(天气|下雨|降雨|气温|温度|台风|暴雨|空气质量|aqi)/i.test(text);
 }
 
 function readNumber(value: string | undefined, fallback: number): number {

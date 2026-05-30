@@ -204,13 +204,28 @@ function analyzeReply(reply: string, reviewCase: ReviewCase): string[] {
   if (/^(收到|好的|了解|明白)[，,。]/.test(reply)) {
     warnings.push("generic opening");
   }
-  if (reply.trim().startsWith(process.env.LARK_AUTOREPLY_PREFIX ?? "AR:")) {
-    warnings.push("contains auto-reply prefix");
+  if (isMarkedAutoReplyText(reply)) {
+    warnings.push("contains auto-reply marker");
   }
   if (reviewCase.idealReply && scoreSimilarity(reply, reviewCase.idealReply) < 0.08) {
     warnings.push("low similarity to human reply");
   }
   return warnings;
+}
+
+function isMarkedAutoReplyText(text: string): boolean {
+  const marker = readAutoReplyMarker();
+  const trimmedText = text.trim();
+  return Boolean((marker && trimmedText.endsWith(` ${marker}`)) || trimmedText.startsWith("AR:"));
+}
+
+function readAutoReplyMarker(): string {
+  const configuredMarker = process.env.LARK_AUTOREPLY_MARKER ?? process.env.LARK_AUTOREPLY_PREFIX;
+  const marker = configuredMarker?.trim();
+  if (!marker || marker === "AR:") {
+    return "ar";
+  }
+  return marker;
 }
 
 function buildReport(sourceFile: string, results: ReviewResult[]): ReviewReport {

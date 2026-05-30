@@ -75,7 +75,7 @@ const maxMessagesPerChat = readPositiveInteger(process.env.LARK_STYLE_LEARN_MAX_
 const learnMode = readLearnMode(process.env.LARK_STYLE_LEARN_MODE);
 const outputCasesFile = resolvePath(process.env.LARK_STYLE_LEARN_CASES_FILE || ".training/learned-reply-cases.json");
 const outputProfileFile = resolvePath(process.env.LARK_SMART_REPLY_LEARNED_STYLE_FILE || ".training/style-profile.md");
-const autoReplyPrefix = process.env.LARK_AUTOREPLY_PREFIX ?? "AR:";
+const autoReplyMarker = readAutoReplyMarker();
 
 async function main(): Promise<void> {
   const client = LarkUserClient.fromEnv(tokenFile);
@@ -316,7 +316,21 @@ function readMessageCreateTime(message: Message): number {
 
 function isUsableText(text: string): boolean {
   const trimmedText = text.trim();
-  return Boolean(trimmedText && trimmedText.length <= 500 && !(autoReplyPrefix && trimmedText.startsWith(autoReplyPrefix)) && !trimmedText.includes("自动回复：") && !trimmedText.includes("我现在不在"));
+  return Boolean(trimmedText && trimmedText.length <= 500 && !isMarkedAutoReplyText(trimmedText) && !trimmedText.includes("自动回复：") && !trimmedText.includes("我现在不在"));
+}
+
+function isMarkedAutoReplyText(text: string): boolean {
+  const trimmedText = text.trim();
+  return Boolean((autoReplyMarker && trimmedText.endsWith(` ${autoReplyMarker}`)) || trimmedText.startsWith("AR:"));
+}
+
+function readAutoReplyMarker(): string {
+  const configuredMarker = process.env.LARK_AUTOREPLY_MARKER ?? process.env.LARK_AUTOREPLY_PREFIX;
+  const marker = configuredMarker?.trim();
+  if (!marker || marker === "AR:") {
+    return "ar";
+  }
+  return marker;
 }
 
 function readPositiveInteger(value: string | undefined, fallback: number): number {
