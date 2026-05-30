@@ -236,7 +236,7 @@ function buildReport(sourceFile: string, results: ReviewResult[]): ReviewReport 
 function buildRecommendations(results: ReviewResult[]): string[] {
   const labels = new Set(results.flatMap((item) => [...item.warnings, ...item.labels]));
   const recommendations: string[] = [];
-  if (labels.has("mentions automation identity")) {
+  if (labels.has("mentions automation identity") || labels.has("暴露AI") || labels.has("暴露AI/机器人")) {
     recommendations.push("继续禁止回复里出现 AI、机器人、自动回复等身份暴露词。");
   }
   if (labels.has("promises unsupported follow-up")) {
@@ -258,7 +258,7 @@ function buildRecommendations(results: ReviewResult[]): string[] {
 }
 
 function isNegativeReviewLabel(label: string): boolean {
-  return !/(有人味|符合上下文|无客服腔|无AI暴露|自然|可以直接发送|通过)/.test(label);
+  return !/(有人味|符合上下文|无客服腔|无AI暴露|自然|可以直接发送|通过|基本符合)/.test(label);
 }
 
 function formatMarkdown(report: ReviewReport): string {

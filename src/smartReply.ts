@@ -239,11 +239,13 @@ function sanitizeSmartReply(reply: string, input: SmartReplyInput): string {
   }
 
   if (hasUnsupportedFollowUpPromise(reply)) {
-    return cleanedReply
-      .replace(/我(去|来)?(查|翻|翻翻|看|看看|确认|核|问)(一下|下|一眼|一遍)?(天气|资料|文档|表格|状态|进度|日程)?[，,。.!！\s]*(稍等|等我下|一会儿?回你|晚点回你|确认后回你)?/g, "这个我现在没法直接确认")
+    const withoutPromise = cleanedReply
+      .replace(/(^|[|。！？!?，,\s])我(去|来)?(查|翻|翻翻|看|看看|确认|核|问)(一下|下|一眼|一遍)?[^|。！？!?]*/g, "$1")
       .replace(/(稍等|等我下|一会儿?回你|晚点回你|确认后回你)/g, "")
+      .replace(/^[，,。.!！\s|]+|[，,。.!！\s|]+$/g, "")
       .replace(/\s+/g, " ")
       .trim();
+    return withoutPromise || "这个我不太确定";
   }
 
   return cleanedReply;
@@ -251,7 +253,7 @@ function sanitizeSmartReply(reply: string, input: SmartReplyInput): string {
 
 function cleanupRoboticPhrasing(reply: string): string {
   return reply
-    .replace(/^(嗯|好|好的|收到|了解|了解了|明白|明白了)[，,。\s]+(理解了[，,。\s]*)?/g, "")
+    .replace(/^(嗯|好|好的|行|收到|了解|了解了|明白|明白了)[，,。\s]+(理解了[，,。\s]*)?/g, "")
     .replace(/从我([^，。|]{0,18})角度来说[，,]?/g, "")
     .replace(/从([^，。|]{0,18})角度来看[，,]?/g, "")
     .replace(/我理解了[，,。\s]*/g, "")
