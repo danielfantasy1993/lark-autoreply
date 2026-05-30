@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
 export type SmartReplyConversationMessage = {
   speaker: "me" | "target" | "other";
   text: string;
@@ -56,16 +59,18 @@ export function createSmartReplyGenerator(): SmartReplyGenerator {
   const maxTokens = readInteger(process.env.LARK_SMART_REPLY_MAX_TOKENS, 180);
   const styleGuide = process.env.LARK_SMART_REPLY_STYLE || defaultStyleGuide;
   const extraContext = process.env.LARK_SMART_REPLY_EXTRA_CONTEXT;
+  const learnedStyleFile = process.env.LARK_SMART_REPLY_LEARNED_STYLE_FILE || ".training/style-profile.md";
 
   if (!apiKey) {
     throw new Error("Missing LARK_SMART_REPLY_API_KEY, OPENAI_API_KEY, or GITHUB_TOKEN. Smart auto-reply needs an OpenAI-compatible chat completions API key.");
   }
 
   return async (input: SmartReplyInput): Promise<string> => {
+    const learnedStyle = await readOptionalTextFile(learnedStyleFile);
     const messages: ChatCompletionRequestMessage[] = [
       {
         role: "system",
-        content: buildSystemPrompt(styleGuide, extraContext)
+        content: buildSystemPrompt(styleGuide, extraContext, learnedStyle)
       },
       {
         role: "user",
@@ -147,7 +152,16 @@ export function extractMessageText(messageType: string | undefined, rawContent: 
   return `[收到一条${messageType || "非文本"}消息]`;
 }
 
-function buildSystemPrompt(styleGuide: string, extraContext: string | undefined): string {
+async function readOptionalTextFile(filePath: string): Promise<string | undefined> {
+  try {
+    const text = await readFile(resolve(process.cwd(), filePath), "utf8");
+    return text.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildSystemPrompt(styleGuide: string, extraContext: string | undefined, learnedStyle: string | undefined): string {
   return [
     "你正在代替用户回复飞书私聊。回复要像用户本人发出的消息。",
     "你只能使用调用方实际提供给你的信息：最近飞书聊天上下文、最新消息、相关飞书知识和补充背景。",
@@ -160,6 +174,7 @@ function buildSystemPrompt(styleGuide: string, extraContext: string | undefined)
     "回复长度默认 1 到 2 句。只有对方明确问复杂问题时才多说。可以用 | 分隔最多 3 条短消息，表示连续发送。",
     "风格要求：",
     styleGuide,
+    learnedStyle ? `从用户历史真实回复中学习到的风格画像：\n${learnedStyle}` : undefined,
     extraContext ? `补充背景：\n${extraContext}` : undefined
   ]
     .filter(Boolean)

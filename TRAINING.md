@@ -4,6 +4,43 @@
 
 ## 推荐流程
 
+### 自动从真实聊天学习
+
+运行：
+
+```powershell
+cd E:\AI_Agent\04_Lark_Operating
+npm.cmd run smart:learn
+```
+
+脚本会读取 `.lark-auto-reply-state.json` 里已经解析过的聊天，拉取最近一段消息，把“对方消息 -> 你本人随后回复”的片段抽成样本，并生成：
+
+```text
+.training/learned-reply-cases.json
+.training/style-profile.md
+```
+
+`style-profile.md` 会被智能回复自动读取，用来影响后续回复风格。它只保存在本地或服务器本机，不会上传 GitHub。
+
+可选配置：
+
+```text
+LARK_STYLE_LEARN_LOOKBACK_DAYS=14
+LARK_STYLE_LEARN_MAX_CHATS=20
+LARK_STYLE_LEARN_MAX_CASES=120
+LARK_SMART_REPLY_LEARNED_STYLE_FILE=.training/style-profile.md
+```
+
+服务器上也可以跑：
+
+```bash
+cd ~/lark-autoreply
+npm run smart:learn
+pm2 restart lark-autoreply --update-env
+```
+
+### 手工补充评测样本
+
 1. 暂停服务器自动回复，避免测试时真实对外乱回：
 
 ```bash
