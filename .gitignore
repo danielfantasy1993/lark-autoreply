@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.lark-user-token.json
+.lark-auto-reply-state.json
+.knowledge/
+logs/
+.tools/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
