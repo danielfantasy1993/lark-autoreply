@@ -40,6 +40,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (url.pathname === "/api/status") {
+    if (!isAuthenticated(request)) {
+      sendJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+    sendJson(response, 200, { app: managedProcessName, status: await getPm2Status(), checkedAt: new Date().toISOString() });
+    return;
+  }
+
   if (url.pathname === "/login" && request.method === "POST") {
     const fields = parseForm(await readRequestBody(request));
     if (safeEquals(fields.username || "", username) && safeEquals(fields.password || "", password)) {
@@ -117,10 +126,14 @@ function renderPage(options: { authenticated: boolean; status?: Pm2Status; messa
     .start { color:white; background:var(--green); }
     .stop { color:white; background:var(--red); }
     .restart { color:white; background:var(--blue); }
+    .refresh { color:var(--ink); background:#eef2f6; border:1px solid var(--line); }
     .status { margin:18px 0 0; padding:14px; border-radius:10px; background:#f8fafc; border:1px solid var(--line); }
+    .status-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
     .pill { display:inline-flex; padding:4px 9px; border-radius:999px; font-size:13px; font-weight:750; background:#eef4ff; color:#3538cd; }
     .online { background:#ecfdf3; color:#067647; }
     .stopped { background:#fff1f3; color:#c01048; }
+    .meta { margin:10px 0 0; font-size:14px; }
+    .tiny { margin:8px 0 0; color:var(--muted); font-size:12px; }
     .alert { margin-top:14px; padding:12px; border-radius:8px; border:1px solid; line-height:1.55; }
     .ok { border-color:#abefc6; background:#ecfdf3; color:#067647; }
     .err { border-color:#fecdca; background:#fff4f2; color:#b42318; }
@@ -132,6 +145,7 @@ function renderPage(options: { authenticated: boolean; status?: Pm2Status; messa
   <main class="card">
     ${options.authenticated ? renderControlContent(status, options.message, options.error) : renderLoginContent(options.error)}
   </main>
+  ${options.authenticated ? renderStatusScript() : ""}
 </body>
 </html>`;
 }
@@ -156,14 +170,55 @@ function renderControlContent(status: Pm2Status | undefined, message?: string, e
     ${message && !error ? `<div class="alert ok">${escapeHtml(message)}</div>` : ""}
     ${error ? `<div class="alert err">${escapeHtml(error)}</div>` : ""}
     <div class="status">
-      当前状态：<span class="pill ${statusClass}">${escapeHtml(statusText)}</span>
-      <p>PID：${escapeHtml(String(status?.pid ?? "-"))}　重启次数：${escapeHtml(String(status?.restarts ?? "-"))}</p>
+      <div class="status-head">
+        <div>当前状态：<span id="status-pill" class="pill ${statusClass}">${escapeHtml(statusText)}</span></div>
+        <button class="refresh" id="refresh-status" type="button">刷新状态</button>
+      </div>
+      <p class="meta">PID：<span id="status-pid">${escapeHtml(String(status?.pid ?? "-"))}</span>　重启次数：<span id="status-restarts">${escapeHtml(String(status?.restarts ?? "-"))}</span></p>
+      <p class="tiny">最后刷新：<span id="status-checked-at">刚刚</span></p>
     </div>
     <form class="actions" method="post" action="/action">
       <button class="start" name="action" value="start" type="submit">启动</button>
       <button class="stop" name="action" value="stop" type="submit">停止</button>
       <button class="restart" name="action" value="restart" type="submit">重启</button>
     </form>`;
+}
+
+function renderStatusScript(): string {
+  return `<script>
+    const statusPill = document.getElementById('status-pill');
+    const statusPid = document.getElementById('status-pid');
+    const statusRestarts = document.getElementById('status-restarts');
+    const statusCheckedAt = document.getElementById('status-checked-at');
+    const refreshButton = document.getElementById('refresh-status');
+
+    function setStatus(payload) {
+      const status = payload && payload.status ? payload.status : { status: 'unknown' };
+      const statusText = status.status || 'unknown';
+      statusPill.textContent = statusText;
+      statusPill.className = 'pill ' + (statusText === 'online' ? 'online' : statusText === 'stopped' ? 'stopped' : '');
+      statusPid.textContent = status.pid ?? '-';
+      statusRestarts.textContent = status.restarts ?? '-';
+      statusCheckedAt.textContent = payload && payload.checkedAt ? new Date(payload.checkedAt).toLocaleString() : new Date().toLocaleString();
+    }
+
+    async function refreshStatus() {
+      refreshButton.disabled = true;
+      try {
+        const response = await fetch('/api/status', { cache: 'no-store' });
+        if (!response.ok) throw new Error('status request failed');
+        setStatus(await response.json());
+      } catch {
+        setStatus({ status: { status: 'refresh failed' }, checkedAt: new Date().toISOString() });
+      } finally {
+        refreshButton.disabled = false;
+      }
+    }
+
+    refreshButton.addEventListener('click', refreshStatus);
+    refreshStatus();
+    setInterval(refreshStatus, 2000);
+  </script>`;
 }
 
 type Pm2Status = {
