@@ -317,6 +317,8 @@ process.once("SIGTERM", () => {
 });
 
 async function main(): Promise<void> {
+  const startedAt = Math.floor(Date.now() / 1000);
+  const minimumMessageTime = replyExisting ? 0 : startedAt;
   const client = LarkUserClient.fromEnv(tokenFile);
   const botClient = LarkClient.fromEnv();
   const state = await loadState();
@@ -348,6 +350,9 @@ async function main(): Promise<void> {
   await saveState(state);
 
   console.log(`Auto reply is running for ${targets.length} target(s).`);
+  if (minimumMessageTime > 0) {
+    console.log(`Messages created before this process started will be skipped. Set LARK_AUTOREPLY_REPLY_EXISTING=true to reply to existing messages.`);
+  }
   if (verboseTargetList) {
     console.log(`Target list: ${targets.map(formatTargetLabel).join(", ")}.`);
   }
@@ -377,9 +382,9 @@ async function main(): Promise<void> {
 
   while (running) {
     try {
-      const priorityResult = await pollTargets(client, botClient, state, priorityTargets, selfOpenId, smartReply, activePriorityPollConcurrency);
+      const priorityResult = await pollTargets(client, botClient, state, priorityTargets, selfOpenId, smartReply, activePriorityPollConcurrency, minimumMessageTime);
       const shouldFullScan = fullScanTargets.length > 0 && Date.now() >= nextFullScanAt;
-      const fullScanResult = shouldFullScan ? await pollTargets(client, botClient, state, fullScanTargets, selfOpenId, smartReply, activeFullPollConcurrency) : emptyPollTargetsResult();
+      const fullScanResult = shouldFullScan ? await pollTargets(client, botClient, state, fullScanTargets, selfOpenId, smartReply, activeFullPollConcurrency, minimumMessageTime) : emptyPollTargetsResult();
       if (shouldFullScan) {
         nextFullScanAt = Date.now() + fullPollIntervalMs;
       }
@@ -425,7 +430,8 @@ async function pollTargets(
   targets: ResolvedTarget[],
   selfOpenId: string | undefined,
   smartReply: SmartReplyGenerator | undefined,
-  concurrency: number
+  concurrency: number,
+  minimumMessageTime: number
 ): Promise<PollTargetsResult> {
   const result = emptyPollTargetsResult();
   if (targets.length === 0) {
@@ -445,7 +451,7 @@ async function pollTargets(
         }
 
         try {
-          await pollOnce(client, botClient, state, target, selfOpenId, smartReply);
+          await pollOnce(client, botClient, state, target, selfOpenId, smartReply, minimumMessageTime);
           result.polled += 1;
         } catch (error) {
           if (isRateLimitError(error)) {
@@ -466,10 +472,11 @@ function emptyPollTargetsResult(): PollTargetsResult {
   return { polled: 0, failures: 0, rateLimited: 0 };
 }
 
-async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: AutoReplyState, target: ResolvedTarget, selfOpenId: string | undefined, smartReply: SmartReplyGenerator | undefined): Promise<void> {
+async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: AutoReplyState, target: ResolvedTarget, selfOpenId: string | undefined, smartReply: SmartReplyGenerator | undefined, minimumMessageTime: number): Promise<void> {
   const endTime = Math.floor(Date.now() / 1000);
   const targetState = state.targets?.[target.key] ?? {};
-  const startTime = targetState.lastCheckedAt === undefined ? endTime : Math.max(0, Math.min(targetState.lastCheckedAt, endTime - pollOverlapSeconds));
+  const checkpointStartTime = targetState.lastCheckedAt === undefined ? endTime : Math.max(0, Math.min(targetState.lastCheckedAt, endTime - pollOverlapSeconds));
+  const startTime = Math.max(checkpointStartTime, minimumMessageTime);
   const messages = await listMessages(client, target.chatId, startTime, endTime);
   let newestCreateTime = startTime;
 
@@ -478,6 +485,10 @@ async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: Au
     const createTime = readMessageCreateTime(message);
     if (createTime > newestCreateTime) {
       newestCreateTime = createTime;
+    }
+
+    if (minimumMessageTime > 0 && createTime < minimumMessageTime) {
+      continue;
     }
 
     if (!messageId || state.repliedMessageIds?.includes(messageId)) {

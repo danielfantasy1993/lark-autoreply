@@ -82,6 +82,7 @@ LARK_AUTOREPLY_MODE=mixed
 LARK_SMART_REPLY_TARGET_NAMES=李文贤,何运伟
 LARK_AUTOREPLY_TEXTS=我现在不在，消息还没收到，先别急着把锅扣过来。|你又召唤了一次，但我这边还是离线状态。|第三次呼叫已记录，我本人依旧没有上线。
 LARK_AUTOREPLY_REPLY_TO_SOURCE_MESSAGE_ENABLED=true
+LARK_AUTOREPLY_REPLY_EXISTING=false
 LARK_AUTOREPLY_POLL_SECONDS=0.3
 LARK_AUTOREPLY_POLL_MS=300
 LARK_AUTOREPLY_POLL_OVERLAP_SECONDS=120
@@ -118,6 +119,8 @@ LARK_AUTOREPLY_SELF_REPLY_CHECK_DELAY_MS=2000
 启动日志默认只显示目标数量和回复分组，避免大部门刷屏。需要排查名单时，把 `LARK_AUTOREPLY_VERBOSE_TARGETS=true`；需要查看哪些部门成员因为没有私聊 `chat_id` 被跳过时，把 `LARK_AUTOREPLY_VERBOSE_SKIPPED_TARGETS=true`。
 
 自动回复只会响应明确识别为目标联系人发给你的消息；你发给对方的消息、机器人自己发出的消息、以及接口没有返回发送人 `open_id` 的消息都会跳过。目标联系人发来的文字、表情、链接、图片等任意消息类型都会触发回复。固定文案模式会把 `LARK_AUTOREPLY_TEXTS` 里用 `|` 分隔的文本当作递进层级：同一会话第一次触发发第 1 条，第二次触发发第 2 条，达到最后一条后继续维持最后一条；如果检测到你在该会话里发过非自动回复内容，递进层级会清零。如果没有配置 `LARK_AUTOREPLY_TEXTS`，旧的 `LARK_AUTOREPLY_TEXT` 仍兼容。
+
+默认 `LARK_AUTOREPLY_REPLY_EXISTING=false`，自动回复进程每次启动后只处理启动之后的新消息，不会补发停止期间累积的历史消息。如果确实要临时补处理历史消息，可以手动设置为 `true`。
 
 默认情况下，自动回复会优先用飞书“回复某条消息”的形式挂到触发它的那条消息下面；如果该接口在某些外部联系人或权限场景失败，会自动回退为普通发消息。需要强制使用普通发消息时，可以设置 `LARK_AUTOREPLY_REPLY_TO_SOURCE_MESSAGE_ENABLED=false`。
 
