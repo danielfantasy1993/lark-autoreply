@@ -14,6 +14,8 @@ const password = process.env.LARK_CONTROL_PANEL_PASSWORD || "";
 const sessionSecret = process.env.LARK_CONTROL_PANEL_SESSION_SECRET || "";
 const managedProcessName = process.env.LARK_CONTROL_PANEL_PM2_APP || "lark-autoreply";
 const cookieName = "lark_control_session";
+const sessionMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_SESSION_SECONDS, 12 * 60 * 60);
+const rememberMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_REMEMBER_SECONDS, 30 * 24 * 60 * 60);
 let lastStablePm2Status: Pm2Status | undefined;
 
 if (!password || !sessionSecret) {
@@ -53,9 +55,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (url.pathname === "/login" && request.method === "POST") {
     const fields = parseForm(await readRequestBody(request));
     if (safeEquals(fields.username || "", username) && safeEquals(fields.password || "", password)) {
+      const maxAgeSeconds = isTruthy(fields.remember) ? rememberMaxAgeSeconds : sessionMaxAgeSeconds;
       response.statusCode = 303;
       response.setHeader("Location", "/");
-      response.setHeader("Set-Cookie", `${cookieName}=${createSessionCookie()}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`);
+      response.setHeader("Set-Cookie", `${cookieName}=${createSessionCookie(maxAgeSeconds)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}`);
       response.end();
       return;
     }
@@ -132,6 +135,8 @@ function renderPage(options: { authenticated: boolean; status?: Pm2Status; messa
     p { color:var(--muted); line-height:1.6; }
     label { display:block; font-size:14px; font-weight:700; margin:14px 0 7px; }
     input { width:100%; border:1px solid var(--line); border-radius:8px; padding:12px; font:inherit; }
+    .check { display:flex; align-items:center; gap:9px; margin-top:14px; color:var(--muted); font-size:14px; font-weight:600; }
+    .check input { width:18px; height:18px; padding:0; }
     button, a.button { display:inline-flex; justify-content:center; align-items:center; min-height:44px; border:0; border-radius:8px; padding:0 16px; font:inherit; font-weight:750; cursor:pointer; text-decoration:none; }
     .primary { width:100%; margin-top:18px; color:white; background:var(--blue); }
     .actions { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:16px; }
@@ -163,6 +168,7 @@ function renderPage(options: { authenticated: boolean; status?: Pm2Status; messa
 }
 
 function renderLoginContent(error?: string): string {
+  const rememberDays = Math.max(1, Math.round(rememberMaxAgeSeconds / 86400));
   return `<h1>自动回复控制台</h1>
     <p>登录后可以一键启动、停止或重启服务器上的自动回复服务。</p>
     ${error ? `<div class="alert err">${escapeHtml(error)}</div>` : ""}
@@ -171,6 +177,7 @@ function renderLoginContent(error?: string): string {
       <input id="username" name="username" autocomplete="username" required>
       <label for="password">密码</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <label class="check" for="remember"><input id="remember" name="remember" type="checkbox" checked>记住登录 ${rememberDays} 天</label>
       <button class="primary" type="submit">登录</button>
     </form>`;
 }
@@ -308,12 +315,20 @@ function isAuthenticated(request: IncomingMessage): boolean {
   if (!nonce || !signature) {
     return false;
   }
-  return safeEquals(sign(nonce), signature);
+  if (!safeEquals(sign(nonce), signature)) {
+    return false;
+  }
+  try {
+    const payload = JSON.parse(Buffer.from(nonce, "base64url").toString("utf8")) as { exp?: number };
+    return typeof payload.exp === "number" && payload.exp > Math.floor(Date.now() / 1000);
+  } catch {
+    return true;
+  }
 }
 
-function createSessionCookie(): string {
-  const nonce = randomBytes(24).toString("base64url");
-  return `${nonce}.${sign(nonce)}`;
+function createSessionCookie(maxAgeSeconds: number): string {
+  const payload = Buffer.from(JSON.stringify({ nonce: randomBytes(24).toString("base64url"), exp: Math.floor(Date.now() / 1000) + maxAgeSeconds })).toString("base64url");
+  return `${payload}.${sign(payload)}`;
 }
 
 function sign(value: string): string {
@@ -336,6 +351,10 @@ function parseForm(body: string): Record<string, string> {
     fields[key] = value;
   }
   return fields;
+}
+
+function isTruthy(value: string | undefined): boolean {
+  return value === "on" || value === "true" || value === "1" || value === "yes";
 }
 
 function readRequestBody(request: IncomingMessage): Promise<string> {
