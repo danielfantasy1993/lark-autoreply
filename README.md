@@ -10,6 +10,40 @@
 
 ## 自动回复
 
+## 自动回复控制台
+
+项目内置一个极简网页控制台，可以在电脑或手机浏览器里登录后，一键启动、停止或重启服务器上的自动回复 PM2 进程。控制台应作为独立 PM2 应用运行，这样停止 `lark-autoreply` 时不会把控制台一起停掉。
+
+在 `.env` 中配置：
+
+```text
+LARK_CONTROL_PANEL_HOST=0.0.0.0
+LARK_CONTROL_PANEL_PORT=8788
+LARK_CONTROL_PANEL_USERNAME=admin
+LARK_CONTROL_PANEL_PASSWORD=replace-with-a-strong-password
+LARK_CONTROL_PANEL_SESSION_SECRET=replace-with-a-long-random-secret
+LARK_CONTROL_PANEL_PM2_APP=lark-autoreply
+```
+
+本地或服务器启动：
+
+```powershell
+npm.cmd run control:panel
+```
+
+PM2 部署时使用 `ecosystem.config.cjs` 会同时包含：
+
+- `lark-autoreply`：自动回复主服务
+- `lark-control-panel`：网页控制台
+
+浏览器访问：
+
+```text
+http://服务器IP:8788
+```
+
+公网使用时请务必设置强密码；后续如绑定域名，建议放到 HTTPS 后面。
+
 如果要在目标联系人给你发飞书消息时自动回复，先完成用户授权：
 
 ```powershell
