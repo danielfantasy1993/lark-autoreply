@@ -14,6 +14,7 @@ const password = process.env.LARK_CONTROL_PANEL_PASSWORD || "";
 const sessionSecret = process.env.LARK_CONTROL_PANEL_SESSION_SECRET || "";
 const managedProcessName = process.env.LARK_CONTROL_PANEL_PM2_APP || "lark-autoreply";
 const cookieName = "lark_control_session";
+let lastStablePm2Status: Pm2Status | undefined;
 
 if (!password || !sessionSecret) {
   throw new Error("LARK_CONTROL_PANEL_PASSWORD and LARK_CONTROL_PANEL_SESSION_SECRET must be configured.");
@@ -236,6 +237,7 @@ type Pm2Status = {
   status: string;
   pid?: number;
   restarts?: number;
+  rawStatus?: string;
 };
 
 async function getPm2Status(): Promise<Pm2Status> {
@@ -250,14 +252,25 @@ async function getPm2Status(): Promise<Pm2Status> {
       return { status: "not found" };
     }
     const pm2Env = app.pm2_env as Record<string, unknown> | undefined;
-    return {
+    return smoothPm2Status({
       status: String(pm2Env?.status || "unknown"),
       pid: typeof app.pid === "number" ? app.pid : undefined,
       restarts: typeof pm2Env?.restart_time === "number" ? pm2Env.restart_time : undefined,
-    };
+    });
   } catch {
     return { status: "status parse failed" };
   }
+}
+
+function smoothPm2Status(status: Pm2Status): Pm2Status {
+  if (status.status === "online" || status.status === "stopped") {
+    lastStablePm2Status = status;
+    return status;
+  }
+  if ((status.status === "stopping" || status.status === "launching" || status.status === "errored") && lastStablePm2Status) {
+    return { ...lastStablePm2Status, rawStatus: status.status };
+  }
+  return status;
 }
 
 async function runPm2(action: string): Promise<{ ok: boolean; message: string }> {
