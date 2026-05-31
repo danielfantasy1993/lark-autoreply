@@ -70,6 +70,19 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (url.pathname === "/favicon.ico") {
+    response.statusCode = 204;
+    response.end();
+    return;
+  }
+
+  if (url.pathname === "/action" && request.method === "GET") {
+    response.statusCode = 303;
+    response.setHeader("Location", "/");
+    response.end();
+    return;
+  }
+
   if (url.pathname === "/action" && request.method === "POST") {
     if (!isAuthenticated(request)) {
       sendHtml(response, 401, renderPage({ authenticated: false, error: "请先登录。" }));
@@ -82,11 +95,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return;
     }
     const result = await runPm2(action);
-    sendHtml(
-      response,
-      result.ok ? 200 : 500,
-      renderPage({ authenticated: true, message: result.message, error: result.ok ? undefined : result.message, status: await getPm2Status() }),
-    );
+    response.statusCode = 303;
+    response.setHeader("Location", `/?${result.ok ? "message" : "error"}=${encodeURIComponent(result.message)}`);
+    response.end();
     return;
   }
 
@@ -100,7 +111,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
-  sendHtml(response, 200, renderPage({ authenticated: true, status: await getPm2Status() }));
+  sendHtml(response, 200, renderPage({ authenticated: true, status: await getPm2Status(), message: url.searchParams.get("message") || undefined, error: url.searchParams.get("error") || undefined }));
 }
 
 function renderPage(options: { authenticated: boolean; status?: Pm2Status; message?: string; error?: string }): string {
