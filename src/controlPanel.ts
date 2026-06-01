@@ -17,7 +17,7 @@ const managedProcessName = process.env.LARK_CONTROL_PANEL_PM2_APP || "lark-autor
 const cookieName = "lark_control_session";
 const sessionMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_SESSION_SECONDS, 12 * 60 * 60);
 const rememberMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_REMEMBER_SECONDS, 30 * 24 * 60 * 60);
-const smartReplyTargetNames = readNameList(process.env.LARK_SMART_REPLY_TARGET_NAMES, ["李文贤", "何运伟", "谷力刚", "邓景夫"]);
+const smartReplyTargetNames = readNameList(process.env.LARK_SMART_REPLY_TARGET_NAMES, ["李文贤", "何运伟", "谷力刚", "邓景夫", "吴德宏"]);
 let lastStablePm2Status: Pm2Status | undefined;
 
 if (!password || !sessionSecret) {
