@@ -7,6 +7,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LarkClient } from "./larkClient.js";
 import { loadRuntimeSwitches, saveRuntimeSwitches, type RuntimeSwitches } from "./runtimeSwitches.js";
+import { LarkUserClient } from "./userTokenClient.js";
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -23,6 +24,7 @@ const sessionMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_
 const rememberMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_REMEMBER_SECONDS, 30 * 24 * 60 * 60);
 const smartReplyTargetNames = readNameList(process.env.LARK_SMART_REPLY_TARGET_NAMES, ["李文贤", "何运伟", "谷力刚", "邓景夫", "吴德宏", "曾庆锦"]);
 const autoReplyStateFile = resolve(rootDir, process.env.LARK_AUTOREPLY_STATE_FILE || ".lark-auto-reply-state.json");
+const userTokenFile = resolve(rootDir, process.env.LARK_USER_TOKEN_FILE || ".lark-user-token.json");
 const chatNameCacheMs = readPositiveInteger(process.env.LARK_CONTROL_PANEL_CHAT_NAME_CACHE_MS, 10 * 60 * 1000);
 let lastStablePm2Status: Pm2Status | undefined;
 let cachedChatNames = new Map<string, string>();
@@ -358,6 +360,10 @@ type LarkChatListResponse = {
   };
 };
 
+type LarkChatInfoResponse = {
+  data?: LarkChatItem;
+};
+
 type LarkChatItem = {
   chat_id?: unknown;
   name?: unknown;
@@ -543,7 +549,7 @@ async function loadGroupChatSwitches(): Promise<GroupChatSwitch[]> {
     }
   }
 
-  const chatNames = await loadChatNames();
+  const chatNames = await loadChatNames([...groupChats.keys()]);
   for (const [chatId, chat] of groupChats) {
     const name = chatNames.get(chatId);
     if (name) {
@@ -575,7 +581,7 @@ function formatGroupChatId(chatId: string): string {
   return chatId.length <= 20 ? chatId : `${chatId.slice(0, 10)}...${chatId.slice(-8)}`;
 }
 
-async function loadChatNames(): Promise<Map<string, string>> {
+async function loadChatNames(chatIds: string[]): Promise<Map<string, string>> {
   const now = Date.now();
   if (cachedChatNamesLoadedAt > 0 && now - cachedChatNamesLoadedAt < chatNameCacheMs) {
     return cachedChatNames;
@@ -583,14 +589,66 @@ async function loadChatNames(): Promise<Map<string, string>> {
 
   cachedChatNamesLoadedAt = now;
   try {
-    cachedChatNames = await fetchChatNames();
+    cachedChatNames = await fetchChatNames(chatIds);
   } catch (error) {
     console.warn(`Could not load group chat names from Lark: ${error instanceof Error ? error.message : String(error)}`);
   }
   return cachedChatNames;
 }
 
-async function fetchChatNames(): Promise<Map<string, string>> {
+async function fetchChatNames(chatIds: string[]): Promise<Map<string, string>> {
+  const chatNames = await fetchUserChatNames(chatIds);
+  const botChatNames = await fetchBotChatNames().catch((error) => {
+    console.warn(`Could not load bot chat list from Lark: ${error instanceof Error ? error.message : String(error)}`);
+    return new Map<string, string>();
+  });
+  for (const chatId of chatIds) {
+    const botName = botChatNames.get(chatId);
+    if (!chatNames.has(chatId) && botName) {
+      chatNames.set(chatId, botName);
+    }
+  }
+  return chatNames;
+}
+
+async function fetchUserChatNames(chatIds: string[]): Promise<Map<string, string>> {
+  const client = LarkUserClient.fromEnv(userTokenFile);
+  const uniqueChatIds = [...new Set(chatIds)];
+  const chatNames = new Map<string, string>();
+  let failures = 0;
+
+  for (let index = 0; index < uniqueChatIds.length; index += 5) {
+    const batch = uniqueChatIds.slice(index, index + 5);
+    const results = await Promise.all(batch.map(async (chatId) => {
+      try {
+        return { chatId, name: await fetchUserChatName(client, chatId) };
+      } catch {
+        failures += 1;
+        return { chatId, name: undefined };
+      }
+    }));
+    for (const result of results) {
+      if (result.name) {
+        chatNames.set(result.chatId, result.name);
+      }
+    }
+  }
+
+  if (failures > 0) {
+    console.warn(`Could not resolve ${failures} group chat name(s) with the user token.`);
+  }
+  return chatNames;
+}
+
+async function fetchUserChatName(client: LarkUserClient, chatId: string): Promise<string | undefined> {
+  const response = await client.request<LarkChatInfoResponse>({
+    method: "GET",
+    path: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}`
+  });
+  return response.data ? readChatName(response.data) : undefined;
+}
+
+async function fetchBotChatNames(): Promise<Map<string, string>> {
   const client = LarkClient.fromEnv();
   const chatNames = new Map<string, string>();
   let pageToken: string | undefined;
