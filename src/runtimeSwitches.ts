@@ -6,6 +6,7 @@ export type RuntimeSwitches = {
   groupFixedReplyEnabled: boolean;
   directFixedReplyEnabled: boolean;
   directSmartReplyEnabled: boolean;
+  directSmartReplyByTarget?: Record<string, boolean>;
   updatedAt?: string;
 };
 
@@ -42,12 +43,26 @@ export function normalizeRuntimeSwitches(value: Partial<RuntimeSwitches>): Runti
     groupFixedReplyEnabled: readBoolean(value.groupFixedReplyEnabled, defaultRuntimeSwitches.groupFixedReplyEnabled),
     directFixedReplyEnabled: readBoolean(value.directFixedReplyEnabled, defaultRuntimeSwitches.directFixedReplyEnabled),
     directSmartReplyEnabled: readBoolean(value.directSmartReplyEnabled, defaultRuntimeSwitches.directSmartReplyEnabled),
+    directSmartReplyByTarget: readBooleanRecord(value.directSmartReplyByTarget),
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : undefined
   };
 }
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function readBooleanRecord(value: unknown): Record<string, boolean> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const result: Record<string, boolean> = {};
+  for (const [key, enabled] of Object.entries(value)) {
+    if (typeof enabled === "boolean") {
+      result[key] = enabled;
+    }
+  }
+  return result;
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

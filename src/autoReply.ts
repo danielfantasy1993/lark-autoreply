@@ -500,10 +500,21 @@ function getDisabledReplyReason(target: ResolvedTarget, useSmartReply: boolean, 
   if (!isChatTarget(target) && useSmartReply && !switches.directSmartReplyEnabled) {
     return "direct AI replies are off";
   }
+  if (!isChatTarget(target) && useSmartReply && !isDirectSmartReplyTargetEnabled(target, switches)) {
+    return `direct AI replies are off for ${target.name}`;
+  }
   if (!isChatTarget(target) && !useSmartReply && !switches.directFixedReplyEnabled) {
     return "direct fixed replies are off";
   }
   return undefined;
+}
+
+function isDirectSmartReplyTargetEnabled(target: ResolvedTarget, switches: RuntimeSwitches): boolean {
+  const selector = smartReplyTargetNames.find((item) => matchesTargetSelector(target, item));
+  if (!selector) {
+    return true;
+  }
+  return switches.directSmartReplyByTarget?.[selector] ?? true;
 }
 
 async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: AutoReplyState, target: ResolvedTarget, selfOpenId: string | undefined, smartReply: SmartReplyGenerator | undefined, minimumMessageTime: number, runtimeSwitches: RuntimeSwitches): Promise<void> {

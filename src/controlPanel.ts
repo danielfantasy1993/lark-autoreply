@@ -17,6 +17,7 @@ const managedProcessName = process.env.LARK_CONTROL_PANEL_PM2_APP || "lark-autor
 const cookieName = "lark_control_session";
 const sessionMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_SESSION_SECONDS, 12 * 60 * 60);
 const rememberMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_REMEMBER_SECONDS, 30 * 24 * 60 * 60);
+const smartReplyTargetNames = readNameList(process.env.LARK_SMART_REPLY_TARGET_NAMES, ["李文贤", "何运伟"]);
 let lastStablePm2Status: Pm2Status | undefined;
 
 if (!password || !sessionSecret) {
@@ -67,7 +68,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       const switches = await saveRuntimeSwitches({
         groupFixedReplyEnabled: isTruthy(fields.groupFixedReplyEnabled),
         directFixedReplyEnabled: isTruthy(fields.directFixedReplyEnabled),
-        directSmartReplyEnabled: isTruthy(fields.directSmartReplyEnabled)
+        directSmartReplyEnabled: isTruthy(fields.directSmartReplyEnabled),
+        directSmartReplyByTarget: readSmartReplyTargetSwitchFields(fields)
       });
       sendJson(response, 200, { switches });
       return;
@@ -172,8 +174,10 @@ function renderPage(options: { authenticated: boolean; status?: Pm2Status; switc
     .status-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
     .switches { margin:16px 0 0; display:grid; gap:10px; }
     .switch-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+    .switch-row.compact { padding:10px 12px; }
     .switch-title { font-weight:750; }
     .switch-sub { margin:3px 0 0; color:var(--muted); font-size:12px; line-height:1.45; }
+    .switch-children { display:grid; gap:8px; margin:-2px 0 2px 12px; padding-left:10px; border-left:2px solid var(--line); }
     .toggle { position:relative; display:inline-flex; width:50px; height:28px; flex:0 0 auto; }
     .toggle input { position:absolute; opacity:0; width:1px; height:1px; }
     .slider { position:absolute; inset:0; cursor:pointer; border-radius:999px; background:#d0d5dd; transition:.18s ease; }
@@ -219,7 +223,7 @@ function renderLoginContent(error?: string): string {
 function renderControlContent(status: Pm2Status | undefined, switches: RuntimeSwitches | undefined, message?: string, error?: string): string {
   const statusText = status?.status || "unknown";
   const statusClass = statusText === "online" ? "online" : statusText === "stopped" ? "stopped" : "";
-  const currentSwitches = switches ?? { groupFixedReplyEnabled: true, directFixedReplyEnabled: true, directSmartReplyEnabled: true };
+  const currentSwitches = switches ?? { groupFixedReplyEnabled: true, directFixedReplyEnabled: true, directSmartReplyEnabled: true, directSmartReplyByTarget: {} };
   return `<div class="top"><div><h1>自动回复控制台</h1><p>${escapeHtml(managedProcessName)}</p></div><a class="logout" href="/logout">退出</a></div>
     ${message && !error ? `<div class="alert ok">${escapeHtml(message)}</div>` : ""}
     ${error ? `<div class="alert err">${escapeHtml(error)}</div>` : ""}
@@ -240,13 +244,23 @@ function renderControlContent(status: Pm2Status | undefined, switches: RuntimeSw
       ${renderSwitch("groupFixedReplyEnabled", "群聊固定回复", "群聊里 @ 你时发送固定文案", currentSwitches.groupFixedReplyEnabled)}
       ${renderSwitch("directFixedReplyEnabled", "单聊固定回复", "单聊目标使用固定文案回复", currentSwitches.directFixedReplyEnabled)}
       ${renderSwitch("directSmartReplyEnabled", "单聊 AI 回复", "单聊智能目标使用 AI 生成回复", currentSwitches.directSmartReplyEnabled)}
+      ${renderSmartReplyTargetSwitches(currentSwitches)}
     </form>`;
 }
 
-function renderSwitch(name: keyof RuntimeSwitches, title: string, subtitle: string, checked: boolean): string {
-  return `<div class="switch-row">
+function renderSwitch(name: string, title: string, subtitle: string, checked: boolean, compact = false): string {
+  return `<div class="switch-row${compact ? " compact" : ""}">
       <div><div class="switch-title">${escapeHtml(title)}</div><p class="switch-sub">${escapeHtml(subtitle)}</p></div>
       <label class="toggle" title="${escapeHtml(title)}"><input name="${escapeHtml(name)}" type="checkbox" ${checked ? "checked" : ""}><span class="slider"></span></label>
+    </div>`;
+}
+
+function renderSmartReplyTargetSwitches(switches: RuntimeSwitches): string {
+  if (smartReplyTargetNames.length === 0) {
+    return "";
+  }
+  return `<div class="switch-children">
+      ${smartReplyTargetNames.map((selector) => renderSwitch(smartReplyTargetFieldName(selector), formatSmartReplyTargetLabel(selector), "只控制这个人的 AI 单聊回复", switches.directSmartReplyByTarget?.[selector] ?? true, true)).join("")}
     </div>`;
 }
 
@@ -286,7 +300,8 @@ function renderStatusScript(): string {
     switchForm.addEventListener('change', async () => {
       const formData = new FormData(switchForm);
       const body = new URLSearchParams();
-      for (const name of ['groupFixedReplyEnabled', 'directFixedReplyEnabled', 'directSmartReplyEnabled']) {
+      const switchNames = Array.from(switchForm.querySelectorAll('input[type="checkbox"]')).map((input) => input.name);
+      for (const name of switchNames) {
         body.set(name, formData.has(name) ? 'true' : 'false');
       }
       await fetch('/api/switches', { method: 'POST', body, cache: 'no-store' });
@@ -411,6 +426,38 @@ function parseForm(body: string): Record<string, string> {
 
 function isTruthy(value: string | undefined): boolean {
   return value === "on" || value === "true" || value === "1" || value === "yes";
+}
+
+function readSmartReplyTargetSwitchFields(fields: Record<string, string>): Record<string, boolean> {
+  const switches: Record<string, boolean> = {};
+  const prefix = "directSmartReplyByTarget.";
+  for (const [key, value] of Object.entries(fields)) {
+    if (key.startsWith(prefix)) {
+      switches[decodeBase64Url(key.slice(prefix.length))] = isTruthy(value);
+    }
+  }
+  return switches;
+}
+
+function smartReplyTargetFieldName(selector: string): string {
+  return `directSmartReplyByTarget.${Buffer.from(selector).toString("base64url")}`;
+}
+
+function decodeBase64Url(value: string): string {
+  return Buffer.from(value, "base64url").toString("utf8");
+}
+
+function formatSmartReplyTargetLabel(selector: string): string {
+  const separatorIndex = selector.indexOf(":");
+  return separatorIndex === -1 ? selector : selector.slice(separatorIndex + 1).trim() || selector;
+}
+
+function readNameList(value: string | undefined, fallback: string[]): string[] {
+  const raw = value?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  return raw.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 function readRequestBody(request: IncomingMessage): Promise<string> {
