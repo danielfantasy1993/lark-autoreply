@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 export type RuntimeSwitches = {
   groupFixedReplyEnabled: boolean;
+  groupFixedReplyByChat?: Record<string, boolean>;
   directFixedReplyEnabled: boolean;
   directSmartReplyEnabled: boolean;
   directSmartReplyByTarget?: Record<string, boolean>;
@@ -41,6 +42,7 @@ export async function saveRuntimeSwitches(switches: RuntimeSwitches): Promise<Ru
 export function normalizeRuntimeSwitches(value: Partial<RuntimeSwitches>): RuntimeSwitches {
   return {
     groupFixedReplyEnabled: readBoolean(value.groupFixedReplyEnabled, defaultRuntimeSwitches.groupFixedReplyEnabled),
+    groupFixedReplyByChat: readBooleanRecord(value.groupFixedReplyByChat),
     directFixedReplyEnabled: readBoolean(value.directFixedReplyEnabled, defaultRuntimeSwitches.directFixedReplyEnabled),
     directSmartReplyEnabled: readBoolean(value.directSmartReplyEnabled, defaultRuntimeSwitches.directSmartReplyEnabled),
     directSmartReplyByTarget: readBooleanRecord(value.directSmartReplyByTarget),

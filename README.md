@@ -31,7 +31,7 @@ LARK_AUTOREPLY_SWITCHES_RELOAD_MS=1000
 
 登录页默认勾选“记住登录”，会保存 30 天签名登录状态；取消勾选时默认 12 小时后需要重新登录。可以通过 `LARK_CONTROL_PANEL_REMEMBER_SECONDS` 和 `LARK_CONTROL_PANEL_SESSION_SECONDS` 调整时长。
 
-控制台还提供运行时开关：群聊固定回复、单聊固定回复、单聊 AI 回复，以及 `LARK_SMART_REPLY_TARGET_NAMES` 中每个 AI 单聊联系人的独立开关。开关状态保存在 `LARK_AUTOREPLY_SWITCHES_FILE` 指定的文件里，自动回复进程默认每秒读取一次；关闭某类回复或某个人期间收到的对应消息会被跳过并记为已处理，重新打开后不会补发旧消息。
+控制台还提供运行时开关：群聊固定回复、每个群聊的固定回复、单聊固定回复、单聊 AI 回复，以及 `LARK_SMART_REPLY_TARGET_NAMES` 中每个 AI 单聊联系人的独立开关。开关状态保存在 `LARK_AUTOREPLY_SWITCHES_FILE` 指定的文件里，自动回复进程默认每秒读取一次；关闭某类回复、某个群聊或某个人期间收到的对应消息会被跳过并记为已处理，重新打开后不会补发旧消息。
 
 本地或服务器启动：
 

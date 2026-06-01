@@ -497,6 +497,9 @@ function getDisabledReplyReason(target: ResolvedTarget, useSmartReply: boolean, 
   if (isChatTarget(target) && !useSmartReply && !switches.groupFixedReplyEnabled) {
     return "group fixed replies are off";
   }
+  if (isChatTarget(target) && !useSmartReply && !isGroupFixedReplyChatEnabled(target, switches)) {
+    return `group fixed replies are off for ${target.chatId}`;
+  }
   if (!isChatTarget(target) && useSmartReply && !switches.directSmartReplyEnabled) {
     return "direct AI replies are off";
   }
@@ -507,6 +510,10 @@ function getDisabledReplyReason(target: ResolvedTarget, useSmartReply: boolean, 
     return "direct fixed replies are off";
   }
   return undefined;
+}
+
+function isGroupFixedReplyChatEnabled(target: ResolvedTarget, switches: RuntimeSwitches): boolean {
+  return switches.groupFixedReplyByChat?.[target.chatId] ?? true;
 }
 
 function isDirectSmartReplyTargetEnabled(target: ResolvedTarget, switches: RuntimeSwitches): boolean {

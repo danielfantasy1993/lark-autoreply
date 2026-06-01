@@ -1,12 +1,15 @@
 import { config as loadDotEnv } from "dotenv";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadRuntimeSwitches, saveRuntimeSwitches, type RuntimeSwitches } from "./runtimeSwitches.js";
 
-loadDotEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") });
+const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+loadDotEnv({ path: resolve(rootDir, ".env") });
 
 const host = process.env.LARK_CONTROL_PANEL_HOST || "0.0.0.0";
 const port = readPositiveInteger(process.env.LARK_CONTROL_PANEL_PORT, 8788);
@@ -18,6 +21,7 @@ const cookieName = "lark_control_session";
 const sessionMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_SESSION_SECONDS, 12 * 60 * 60);
 const rememberMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_REMEMBER_SECONDS, 30 * 24 * 60 * 60);
 const smartReplyTargetNames = readNameList(process.env.LARK_SMART_REPLY_TARGET_NAMES, ["李文贤", "何运伟", "谷力刚", "邓景夫", "吴德宏", "曾庆锦"]);
+const autoReplyStateFile = resolve(rootDir, process.env.LARK_AUTOREPLY_STATE_FILE || ".lark-auto-reply-state.json");
 let lastStablePm2Status: Pm2Status | undefined;
 
 if (!password || !sessionSecret) {
@@ -60,16 +64,19 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return;
     }
     if (request.method === "GET") {
-      sendJson(response, 200, { switches: await loadRuntimeSwitches() });
+      sendJson(response, 200, { switches: await loadRuntimeSwitches(), groupChats: await loadGroupChatSwitches() });
       return;
     }
     if (request.method === "POST") {
       const fields = parseForm(await readRequestBody(request));
+      const previousSwitches = await loadRuntimeSwitches();
       const switches = await saveRuntimeSwitches({
+        ...previousSwitches,
         groupFixedReplyEnabled: isTruthy(fields.groupFixedReplyEnabled),
+        groupFixedReplyByChat: { ...(previousSwitches.groupFixedReplyByChat ?? {}), ...readGroupChatSwitchFields(fields) },
         directFixedReplyEnabled: isTruthy(fields.directFixedReplyEnabled),
         directSmartReplyEnabled: isTruthy(fields.directSmartReplyEnabled),
-        directSmartReplyByTarget: readSmartReplyTargetSwitchFields(fields)
+        directSmartReplyByTarget: { ...(previousSwitches.directSmartReplyByTarget ?? {}), ...readSmartReplyTargetSwitchFields(fields) }
       });
       sendJson(response, 200, { switches });
       return;
@@ -141,10 +148,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
-  sendHtml(response, 200, renderPage({ authenticated: true, status: await getPm2Status(), switches: await loadRuntimeSwitches(), message: url.searchParams.get("message") || undefined, error: url.searchParams.get("error") || undefined }));
+  sendHtml(response, 200, renderPage({ authenticated: true, status: await getPm2Status(), switches: await loadRuntimeSwitches(), groupChats: await loadGroupChatSwitches(), message: url.searchParams.get("message") || undefined, error: url.searchParams.get("error") || undefined }));
 }
 
-function renderPage(options: { authenticated: boolean; status?: Pm2Status; switches?: RuntimeSwitches; message?: string; error?: string }): string {
+function renderPage(options: { authenticated: boolean; status?: Pm2Status; switches?: RuntimeSwitches; groupChats?: GroupChatSwitch[]; message?: string; error?: string }): string {
   const status = options.status;
   return `<!doctype html>
 <html lang="zh-CN">
@@ -183,6 +190,9 @@ function renderPage(options: { authenticated: boolean; status?: Pm2Status; switc
     .switch-title { font-weight:750; }
     .switch-sub { margin:3px 0 0; color:var(--muted); font-size:12px; line-height:1.45; }
     .switch-children { display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:8px; margin:-2px 0 2px 12px; padding-left:10px; border-left:2px solid var(--line); }
+    .switch-layer { margin:-2px 0 2px 12px; padding-left:10px; border-left:2px solid var(--line); }
+    .switch-layer summary { cursor:pointer; color:var(--muted); font-size:13px; font-weight:750; padding:6px 0; }
+    .switch-layer .switch-children { grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); margin:2px 0 0; padding-left:0; border-left:0; }
     .toggle { position:relative; display:inline-flex; width:50px; height:28px; flex:0 0 auto; }
     .toggle input { position:absolute; opacity:0; width:1px; height:1px; }
     .slider { position:absolute; inset:0; cursor:pointer; border-radius:999px; background:#d0d5dd; transition:.18s ease; }
@@ -203,7 +213,7 @@ function renderPage(options: { authenticated: boolean; status?: Pm2Status; switc
 </head>
 <body>
   <main class="card">
-    ${options.authenticated ? renderControlContent(status, options.switches, options.message, options.error) : renderLoginContent(options.error)}
+    ${options.authenticated ? renderControlContent(status, options.switches, options.groupChats ?? [], options.message, options.error) : renderLoginContent(options.error)}
   </main>
   ${options.authenticated ? renderStatusScript() : ""}
 </body>
@@ -225,10 +235,10 @@ function renderLoginContent(error?: string): string {
     </form>`;
 }
 
-function renderControlContent(status: Pm2Status | undefined, switches: RuntimeSwitches | undefined, message?: string, error?: string): string {
+function renderControlContent(status: Pm2Status | undefined, switches: RuntimeSwitches | undefined, groupChats: GroupChatSwitch[], message?: string, error?: string): string {
   const statusText = status?.status || "unknown";
   const statusClass = statusText === "online" ? "online" : statusText === "stopped" ? "stopped" : "";
-  const currentSwitches = switches ?? { groupFixedReplyEnabled: true, directFixedReplyEnabled: true, directSmartReplyEnabled: true, directSmartReplyByTarget: {} };
+  const currentSwitches = switches ?? { groupFixedReplyEnabled: true, groupFixedReplyByChat: {}, directFixedReplyEnabled: true, directSmartReplyEnabled: true, directSmartReplyByTarget: {} };
   return `<div class="top"><div><h1>自动回复控制台</h1><p>${escapeHtml(managedProcessName)}</p></div><a class="logout" href="/logout">退出</a></div>
     ${message && !error ? `<div class="alert ok">${escapeHtml(message)}</div>` : ""}
     ${error ? `<div class="alert err">${escapeHtml(error)}</div>` : ""}
@@ -247,6 +257,7 @@ function renderControlContent(status: Pm2Status | undefined, switches: RuntimeSw
     </form>
     <form class="switches" id="reply-switches">
       ${renderSwitch("groupFixedReplyEnabled", "群聊固定回复", "群聊里 @ 你时发送固定文案", currentSwitches.groupFixedReplyEnabled)}
+      ${renderGroupChatSwitches(currentSwitches, groupChats)}
       ${renderSwitch("directFixedReplyEnabled", "单聊固定回复", "单聊目标使用固定文案回复", currentSwitches.directFixedReplyEnabled)}
       ${renderSwitch("directSmartReplyEnabled", "单聊 AI 回复", "单聊智能目标使用 AI 生成回复", currentSwitches.directSmartReplyEnabled)}
       ${renderSmartReplyTargetSwitches(currentSwitches)}
@@ -321,6 +332,15 @@ type Pm2Status = {
   pid?: number;
   restarts?: number;
   rawStatus?: string;
+};
+
+type GroupChatSwitch = {
+  chatId: string;
+  label: string;
+};
+
+type AutoReplyStateSnapshot = {
+  targets?: Record<string, { chatId?: unknown; targetType?: unknown }>;
 };
 
 async function getPm2Status(): Promise<Pm2Status> {
@@ -444,8 +464,23 @@ function readSmartReplyTargetSwitchFields(fields: Record<string, string>): Recor
   return switches;
 }
 
+function readGroupChatSwitchFields(fields: Record<string, string>): Record<string, boolean> {
+  const switches: Record<string, boolean> = {};
+  const prefix = "groupFixedReplyByChat.";
+  for (const [key, value] of Object.entries(fields)) {
+    if (key.startsWith(prefix)) {
+      switches[decodeBase64Url(key.slice(prefix.length))] = isTruthy(value);
+    }
+  }
+  return switches;
+}
+
 function smartReplyTargetFieldName(selector: string): string {
   return `directSmartReplyByTarget.${Buffer.from(selector).toString("base64url")}`;
+}
+
+function groupChatFieldName(chatId: string): string {
+  return `groupFixedReplyByChat.${Buffer.from(chatId).toString("base64url")}`;
 }
 
 function decodeBase64Url(value: string): string {
@@ -463,6 +498,48 @@ function readNameList(value: string | undefined, fallback: string[]): string[] {
     return fallback;
   }
   return raw.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+async function loadGroupChatSwitches(): Promise<GroupChatSwitch[]> {
+  const groupChats = new Map<string, GroupChatSwitch>();
+  for (const chat of readConfiguredGroupChats()) {
+    groupChats.set(chat.chatId, chat);
+  }
+
+  try {
+    const state = JSON.parse(await readFile(autoReplyStateFile, "utf8")) as AutoReplyStateSnapshot;
+    for (const [key, target] of Object.entries(state.targets ?? {})) {
+      const chatId = typeof target.chatId === "string" ? target.chatId : undefined;
+      if (!chatId || (target.targetType !== "chat" && !key.startsWith("chat:"))) {
+        continue;
+      }
+      groupChats.set(chatId, { chatId, label: formatGroupChatLabel(chatId) });
+    }
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+    if (code !== "ENOENT") {
+      console.warn(`Could not load group chat switches from state file: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return [...groupChats.values()].sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+}
+
+function readConfiguredGroupChats(): GroupChatSwitch[] {
+  return (process.env.LARK_AUTOREPLY_TARGETS || "")
+    .split(/[,，]/)
+    .map((item) => item.trim())
+    .filter((item) => item.toLowerCase().startsWith("chat:"))
+    .map((item) => item.slice(item.indexOf(":") + 1).trim())
+    .filter(Boolean)
+    .map((chatId) => ({ chatId, label: formatGroupChatLabel(chatId) }));
+}
+
+function formatGroupChatLabel(chatId: string): string {
+  if (chatId.length <= 16) {
+    return `群聊 ${chatId}`;
+  }
+  return `群聊 ${chatId.slice(0, 8)}...${chatId.slice(-6)}`;
 }
 
 function readRequestBody(request: IncomingMessage): Promise<string> {
@@ -491,4 +568,16 @@ function escapeHtml(value: string): string {
 function readPositiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value || "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function renderGroupChatSwitches(switches: RuntimeSwitches, groupChats: GroupChatSwitch[]): string {
+  if (groupChats.length === 0) {
+    return "";
+  }
+  return `<details class="switch-layer" open>
+      <summary>群聊单独开关（${groupChats.length}）</summary>
+      <div class="switch-children">
+        ${groupChats.map((chat) => renderSwitch(groupChatFieldName(chat.chatId), chat.label, chat.chatId, switches.groupFixedReplyByChat?.[chat.chatId] ?? true, true)).join("")}
+      </div>
+    </details>`;
 }
