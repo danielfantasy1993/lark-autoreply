@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LarkClient } from "./larkClient.js";
 import { loadRuntimeSwitches, saveRuntimeSwitches, type RuntimeSwitches } from "./runtimeSwitches.js";
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -22,7 +23,10 @@ const sessionMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_
 const rememberMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_REMEMBER_SECONDS, 30 * 24 * 60 * 60);
 const smartReplyTargetNames = readNameList(process.env.LARK_SMART_REPLY_TARGET_NAMES, ["李文贤", "何运伟", "谷力刚", "邓景夫", "吴德宏", "曾庆锦"]);
 const autoReplyStateFile = resolve(rootDir, process.env.LARK_AUTOREPLY_STATE_FILE || ".lark-auto-reply-state.json");
+const chatNameCacheMs = readPositiveInteger(process.env.LARK_CONTROL_PANEL_CHAT_NAME_CACHE_MS, 10 * 60 * 1000);
 let lastStablePm2Status: Pm2Status | undefined;
+let cachedChatNames = new Map<string, string>();
+let cachedChatNamesLoadedAt = 0;
 
 if (!password || !sessionSecret) {
   throw new Error("LARK_CONTROL_PANEL_PASSWORD and LARK_CONTROL_PANEL_SESSION_SECRET must be configured.");
@@ -187,12 +191,14 @@ function renderPage(options: { authenticated: boolean; status?: Pm2Status; switc
     .switch-row.compact .toggle { width:38px; height:22px; }
     .switch-row.compact .slider::before { width:16px; height:16px; }
     .switch-row.compact .toggle input:checked + .slider::before { transform:translateX(16px); }
-    .switch-title { font-weight:750; }
+    .switch-row > div:first-child { min-width:0; }
+    .switch-title { font-weight:750; overflow-wrap:anywhere; }
     .switch-sub { margin:3px 0 0; color:var(--muted); font-size:12px; line-height:1.45; }
     .switch-children { display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:8px; margin:-2px 0 2px 12px; padding-left:10px; border-left:2px solid var(--line); }
     .switch-layer { margin:-2px 0 2px 12px; padding-left:10px; border-left:2px solid var(--line); }
     .switch-layer summary { cursor:pointer; color:var(--muted); font-size:13px; font-weight:750; padding:6px 0; }
-    .switch-layer .switch-children { grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); margin:2px 0 0; padding-left:0; border-left:0; }
+    .switch-layer .switch-children { grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); margin:2px 0 0; padding-left:0; border-left:0; }
+    .group-switch .switch-sub { display:block; margin-top:2px; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .toggle { position:relative; display:inline-flex; width:50px; height:28px; flex:0 0 auto; }
     .toggle input { position:absolute; opacity:0; width:1px; height:1px; }
     .slider { position:absolute; inset:0; cursor:pointer; border-radius:999px; background:#d0d5dd; transition:.18s ease; }
@@ -337,10 +343,25 @@ type Pm2Status = {
 type GroupChatSwitch = {
   chatId: string;
   label: string;
+  hasResolvedName: boolean;
 };
 
 type AutoReplyStateSnapshot = {
   targets?: Record<string, { chatId?: unknown; targetType?: unknown }>;
+};
+
+type LarkChatListResponse = {
+  data?: {
+    items?: LarkChatItem[];
+    has_more?: boolean;
+    page_token?: string;
+  };
+};
+
+type LarkChatItem = {
+  chat_id?: unknown;
+  name?: unknown;
+  i18n_names?: unknown;
 };
 
 async function getPm2Status(): Promise<Pm2Status> {
@@ -513,12 +534,20 @@ async function loadGroupChatSwitches(): Promise<GroupChatSwitch[]> {
       if (!chatId || (target.targetType !== "chat" && !key.startsWith("chat:"))) {
         continue;
       }
-      groupChats.set(chatId, { chatId, label: formatGroupChatLabel(chatId) });
+      groupChats.set(chatId, { chatId, label: formatGroupChatLabel(chatId), hasResolvedName: false });
     }
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
     if (code !== "ENOENT") {
       console.warn(`Could not load group chat switches from state file: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const chatNames = await loadChatNames();
+  for (const [chatId, chat] of groupChats) {
+    const name = chatNames.get(chatId);
+    if (name) {
+      groupChats.set(chatId, { chatId, label: name, hasResolvedName: true });
     }
   }
 
@@ -532,7 +561,7 @@ function readConfiguredGroupChats(): GroupChatSwitch[] {
     .filter((item) => item.toLowerCase().startsWith("chat:"))
     .map((item) => item.slice(item.indexOf(":") + 1).trim())
     .filter(Boolean)
-    .map((chatId) => ({ chatId, label: formatGroupChatLabel(chatId) }));
+    .map((chatId) => ({ chatId, label: formatGroupChatLabel(chatId), hasResolvedName: false }));
 }
 
 function formatGroupChatLabel(chatId: string): string {
@@ -540,6 +569,54 @@ function formatGroupChatLabel(chatId: string): string {
     return `群聊 ${chatId}`;
   }
   return `群聊 ${chatId.slice(0, 8)}...${chatId.slice(-6)}`;
+}
+
+function formatGroupChatId(chatId: string): string {
+  return chatId.length <= 20 ? chatId : `${chatId.slice(0, 10)}...${chatId.slice(-8)}`;
+}
+
+async function loadChatNames(): Promise<Map<string, string>> {
+  const now = Date.now();
+  if (cachedChatNamesLoadedAt > 0 && now - cachedChatNamesLoadedAt < chatNameCacheMs) {
+    return cachedChatNames;
+  }
+
+  cachedChatNamesLoadedAt = now;
+  try {
+    cachedChatNames = await fetchChatNames();
+  } catch (error) {
+    console.warn(`Could not load group chat names from Lark: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return cachedChatNames;
+}
+
+async function fetchChatNames(): Promise<Map<string, string>> {
+  const client = LarkClient.fromEnv();
+  const chatNames = new Map<string, string>();
+  let pageToken: string | undefined;
+  let hasMore = false;
+  do {
+    const response = await client.listChats(100, pageToken) as LarkChatListResponse;
+    for (const chat of response.data?.items ?? []) {
+      const chatId = readNonEmptyString(chat.chat_id);
+      const name = readChatName(chat);
+      if (chatId && name) {
+        chatNames.set(chatId, name);
+      }
+    }
+    hasMore = Boolean(response.data?.has_more);
+    pageToken = response.data?.page_token;
+  } while (hasMore && pageToken);
+  return chatNames;
+}
+
+function readChatName(chat: LarkChatItem): string | undefined {
+  const i18nNames = chat.i18n_names && typeof chat.i18n_names === "object" ? chat.i18n_names as Record<string, unknown> : undefined;
+  return readNonEmptyString(chat.name) ?? readNonEmptyString(i18nNames?.zh_cn) ?? readNonEmptyString(i18nNames?.en_us);
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function readRequestBody(request: IncomingMessage): Promise<string> {
@@ -577,7 +654,15 @@ function renderGroupChatSwitches(switches: RuntimeSwitches, groupChats: GroupCha
   return `<details class="switch-layer" open>
       <summary>群聊单独开关（${groupChats.length}）</summary>
       <div class="switch-children">
-        ${groupChats.map((chat) => renderSwitch(groupChatFieldName(chat.chatId), chat.label, chat.chatId, switches.groupFixedReplyByChat?.[chat.chatId] ?? true, true)).join("")}
+        ${groupChats.map((chat) => renderGroupChatSwitch(chat, switches.groupFixedReplyByChat?.[chat.chatId] ?? true)).join("")}
       </div>
     </details>`;
+}
+
+function renderGroupChatSwitch(chat: GroupChatSwitch, checked: boolean): string {
+  const subtitle = chat.hasResolvedName ? formatGroupChatId(chat.chatId) : `未取到群名：${formatGroupChatId(chat.chatId)}`;
+  return `<div class="switch-row compact group-switch">
+      <div><div class="switch-title">${escapeHtml(chat.label)}</div><p class="switch-sub" title="${escapeHtml(chat.chatId)}">${escapeHtml(subtitle)}</p></div>
+      <label class="toggle" title="${escapeHtml(`${chat.label} ${chat.chatId}`)}"><input name="${escapeHtml(groupChatFieldName(chat.chatId))}" type="checkbox" ${checked ? "checked" : ""}><span class="slider"></span></label>
+    </div>`;
 }
