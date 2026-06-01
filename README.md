@@ -83,7 +83,7 @@ LARK_AUTOREPLY_EXCLUDE_TARGET_NAMES=
 LARK_AUTOREPLY_TARGET_NAMES=谷力刚,陈威
 LARK_AUTOREPLY_TARGET_NAME=陈威
 LARK_AUTOREPLY_MODE=mixed
-LARK_SMART_REPLY_TARGET_NAMES=李文贤,何运伟,谷力刚
+LARK_SMART_REPLY_TARGET_NAMES=李文贤,何运伟,谷力刚,邓景夫
 LARK_AUTOREPLY_TEXTS=我现在不在，消息还没收到，先别急着把锅扣过来。|你又召唤了一次，但我这边还是离线状态。|第三次呼叫已记录，我本人依旧没有上线。
 LARK_AUTOREPLY_REPLY_TO_SOURCE_MESSAGE_ENABLED=true
 LARK_AUTOREPLY_REPLY_EXISTING=false
@@ -136,7 +136,7 @@ LARK_AUTOREPLY_SELF_REPLY_CHECK_DELAY_MS=2000
 
 ```text
 LARK_AUTOREPLY_MODE=mixed
-LARK_SMART_REPLY_TARGET_NAMES=李文贤,何运伟,谷力刚,external:李翔
+LARK_SMART_REPLY_TARGET_NAMES=李文贤,何运伟,谷力刚,邓景夫,external:李翔
 LARK_SMART_REPLY_API_KEY=sk_xxx
 LARK_SMART_REPLY_API_URL=https://api.openai.com/v1/chat/completions
 LARK_SMART_REPLY_MODEL=gpt-4o-mini
@@ -149,13 +149,13 @@ LARK_SMART_REPLY_STYLE=用中文自然简短回复，像我本人在飞书里随
 # LARK_SMART_REPLY_EXTRA_CONTEXT=我最近主要在处理 XXX 项目，语气直接但礼貌。
 ```
 
-混合模式仍使用同一个 `npm.cmd run autoreply` 轮询进程，目标联系人继续由 `LARK_AUTOREPLY_TARGETS` 控制。比如要让李文贤、何运伟、谷力刚走 AI，同时其他部门/个人走固定文案，可以这样配置：
+混合模式仍使用同一个 `npm.cmd run autoreply` 轮询进程，目标联系人继续由 `LARK_AUTOREPLY_TARGETS` 控制。比如要让李文贤、何运伟、谷力刚、邓景夫走 AI，同时其他部门/个人走固定文案，可以这样配置：
 
 ```text
-LARK_AUTOREPLY_TARGETS=department:研发中心,department:产品中心,department:项目中心,department:Global Business,person:陈威,person:刘峥,person:李文贤,person:何运伟,person:谷力刚,external:李翔
+LARK_AUTOREPLY_TARGETS=department:研发中心,department:产品中心,department:项目中心,department:Global Business,person:陈威,person:刘峥,person:李文贤,person:何运伟,person:谷力刚,person:邓景夫,external:李翔
 LARK_AUTOREPLY_EXCLUDE_TARGET_NAMES=
 LARK_AUTOREPLY_MODE=mixed
-LARK_SMART_REPLY_TARGET_NAMES=李文贤,何运伟,谷力刚,external:李翔
+LARK_SMART_REPLY_TARGET_NAMES=李文贤,何运伟,谷力刚,邓景夫,external:李翔
 ```
 
 智能联系人每收到一条目标消息会读取最近一段聊天上下文，生成回复并发送；不会再按 `LARK_AUTOREPLY_TEXTS` 连续发送固定文案。智能回复可以用 `|` 分隔成最多 `LARK_SMART_REPLY_MAX_MESSAGES` 条短消息，默认最多 3 条，用来模拟真人连续发几句。`LARK_SMART_REPLY_CONTEXT_SECONDS` 控制用于生成回复的上下文时间范围，默认 24 小时。如果想所有目标都走固定文案，设置 `LARK_AUTOREPLY_MODE=fixed`；如果想所有目标都走 AI，设置 `LARK_AUTOREPLY_MODE=smart`。

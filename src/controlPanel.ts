@@ -17,7 +17,7 @@ const managedProcessName = process.env.LARK_CONTROL_PANEL_PM2_APP || "lark-autor
 const cookieName = "lark_control_session";
 const sessionMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_SESSION_SECONDS, 12 * 60 * 60);
 const rememberMaxAgeSeconds = readPositiveInteger(process.env.LARK_CONTROL_PANEL_REMEMBER_SECONDS, 30 * 24 * 60 * 60);
-const smartReplyTargetNames = readNameList(process.env.LARK_SMART_REPLY_TARGET_NAMES, ["李文贤", "何运伟"]);
+const smartReplyTargetNames = readNameList(process.env.LARK_SMART_REPLY_TARGET_NAMES, ["李文贤", "何运伟", "谷力刚", "邓景夫"]);
 let lastStablePm2Status: Pm2Status | undefined;
 
 if (!password || !sessionSecret) {
@@ -174,10 +174,15 @@ function renderPage(options: { authenticated: boolean; status?: Pm2Status; switc
     .status-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
     .switches { margin:16px 0 0; display:grid; gap:10px; }
     .switch-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px; border:1px solid var(--line); border-radius:10px; background:#fff; }
-    .switch-row.compact { padding:10px 12px; }
+    .switch-row.compact { padding:8px 10px; min-height:38px; }
+    .switch-row.compact .switch-title { font-size:14px; font-weight:700; }
+    .switch-row.compact .switch-sub { display:none; }
+    .switch-row.compact .toggle { width:38px; height:22px; }
+    .switch-row.compact .slider::before { width:16px; height:16px; }
+    .switch-row.compact .toggle input:checked + .slider::before { transform:translateX(16px); }
     .switch-title { font-weight:750; }
     .switch-sub { margin:3px 0 0; color:var(--muted); font-size:12px; line-height:1.45; }
-    .switch-children { display:grid; gap:8px; margin:-2px 0 2px 12px; padding-left:10px; border-left:2px solid var(--line); }
+    .switch-children { display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:8px; margin:-2px 0 2px 12px; padding-left:10px; border-left:2px solid var(--line); }
     .toggle { position:relative; display:inline-flex; width:50px; height:28px; flex:0 0 auto; }
     .toggle input { position:absolute; opacity:0; width:1px; height:1px; }
     .slider { position:absolute; inset:0; cursor:pointer; border-radius:999px; background:#d0d5dd; transition:.18s ease; }
@@ -250,7 +255,7 @@ function renderControlContent(status: Pm2Status | undefined, switches: RuntimeSw
 
 function renderSwitch(name: string, title: string, subtitle: string, checked: boolean, compact = false): string {
   return `<div class="switch-row${compact ? " compact" : ""}">
-      <div><div class="switch-title">${escapeHtml(title)}</div><p class="switch-sub">${escapeHtml(subtitle)}</p></div>
+      <div><div class="switch-title">${escapeHtml(title)}</div>${subtitle ? `<p class="switch-sub">${escapeHtml(subtitle)}</p>` : ""}</div>
       <label class="toggle" title="${escapeHtml(title)}"><input name="${escapeHtml(name)}" type="checkbox" ${checked ? "checked" : ""}><span class="slider"></span></label>
     </div>`;
 }
@@ -260,7 +265,7 @@ function renderSmartReplyTargetSwitches(switches: RuntimeSwitches): string {
     return "";
   }
   return `<div class="switch-children">
-      ${smartReplyTargetNames.map((selector) => renderSwitch(smartReplyTargetFieldName(selector), formatSmartReplyTargetLabel(selector), "只控制这个人的 AI 单聊回复", switches.directSmartReplyByTarget?.[selector] ?? true, true)).join("")}
+      ${smartReplyTargetNames.map((selector) => renderSwitch(smartReplyTargetFieldName(selector), formatSmartReplyTargetLabel(selector), "", switches.directSmartReplyByTarget?.[selector] ?? true, true)).join("")}
     </div>`;
 }
 
