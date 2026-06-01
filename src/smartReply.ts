@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 export type SmartReplyConversationMessage = {
-  speaker: "me" | "target" | "other";
+  speaker: "me" | "auto" | "target" | "other";
   text: string;
   createdAt?: number;
 };
@@ -44,6 +44,8 @@ const defaultStyleGuide = [
   "只有对方消息本身是纯确认词时才回 nice/get/行；像“有绩效”“规模可以更大”“看他是不是符合预期”这类是在补信息或继续讨论，要承接上下文。",
   "如果上下文已经在聊 DK057 和 DK075，对方说“分别说说吧”“都说说”“两个都说”，不要再问是哪个项目，直接按 DK057、DK075 分开概括。",
   "如果上下文已经在聊 DK057，对方只发 57、检卡、LPCD 这类短词，要沿着 DK057/NFCR 继续答，不要反复问“哪个点/哪个模块”。",
+  "如果最新消息是短句、补充句、省略句、追问或纠正，比如“也是两米”“那这样呢”“不是这个”“然后呢”，必须先结合最近 3 到 6 轮上下文判断它接的是哪件事，不要当成全新的独立问题。",
+  "如果我刚才已经自动回复过，对方继续补一句，优先承接刚才那轮讨论，必要时修正上一句回答，不要重新开话题。",
   "最新消息不是天气时，绝对不要回复天气；即使历史上下文里出现过天气，也要以最新消息为准。",
   "不要每次都用收到、好的、了解、明白、我看下开头；除非上下文确实需要。",
   "不要机械复述对方问题，不要写总结腔，不要用首先/其次/感谢你的反馈/我理解了。",
@@ -192,6 +194,8 @@ function buildSystemPrompt(styleGuide: string, extraContext: string | undefined,
     "如果回复需要依赖外部资料或实时状态，但上下文没有给出答案，直接承认当前没法确认，或者向对方要一个必要信息；不要承诺稍后查看或确认后再回。",
     "特别是天气、实时价格、实时进度、日程空闲等问题：如果上下文没有结果，不要说正在查询、马上查、稍等一下。",
     "聊天上下文里如果出现过自动回复、我在出差、请留言、稍后再聊等固定托管文案，不要模仿、不要复用。",
+    "聊天上下文里标为“我刚才自动回”的内容只用于理解连续对话和承接上一句，不代表真实人工回复风格；不要照抄它的句式。",
+    "最新消息如果像是在补充、追问、纠正或承接上一句，必须把它放回最近上下文里理解；不要只看最新消息本身。",
     "回复长度默认 1 句；只有对方明确问复杂问题时才 1 到 2 句。可以用 | 分隔最多 2 条短消息，表示连续发送。",
     "风格要求：",
     styleGuide,
@@ -224,6 +228,9 @@ function buildUserPrompt(input: SmartReplyInput): string {
 function speakerLabel(speaker: SmartReplyConversationMessage["speaker"], targetName: string): string {
   if (speaker === "me") {
     return "我";
+  }
+  if (speaker === "auto") {
+    return "我刚才自动回";
   }
   if (speaker === "target") {
     return targetName;

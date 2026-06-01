@@ -1143,15 +1143,29 @@ async function readConversationContext(client: LarkUserClient, target: ResolvedT
   return messages
     .map((message): SmartReplyConversationMessage | undefined => {
       const senderOpenId = getSenderOpenId(message);
-      const speaker = senderOpenId === selfOpenId ? "me" : senderOpenId === target.openId ? "target" : "other";
+      const baseSpeaker = senderOpenId === selfOpenId ? "me" : senderOpenId === target.openId ? "target" : "other";
       const text = extractMessageText(message.msg_type, message.content ?? message.body?.content);
-      if (!text || (speaker === "me" && isDelegatedAutoReplyText(text))) {
+      if (!text) {
         return undefined;
       }
-      return { speaker, text, createdAt: readMessageCreateTime(message) };
+      const isAutoReply = baseSpeaker === "me" && isDelegatedAutoReplyText(text);
+      const speaker = isAutoReply ? "auto" : baseSpeaker;
+      const contextText = isAutoReply ? stripAutoReplyMarker(text) : text;
+      return { speaker, text: contextText, createdAt: readMessageCreateTime(message) };
     })
     .filter((message): message is SmartReplyConversationMessage => Boolean(message))
     .slice(-maxSmartReplyContextMessages);
+}
+
+function stripAutoReplyMarker(text: string): string {
+  let result = text.trim();
+  if (autoReplyMarker && result.endsWith(` ${autoReplyMarker}`)) {
+    result = result.slice(0, -(` ${autoReplyMarker}`).length).trim();
+  }
+  if (result.endsWith(" ar")) {
+    result = result.slice(0, -3).trim();
+  }
+  return result.replace(/^AR:\s*/i, "").trim();
 }
 
 function isDelegatedAutoReplyText(text: string): boolean {
