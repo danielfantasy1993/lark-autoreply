@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LarkClient } from "./larkClient.js";
 import { getKnowledgeIndexFile, loadKnowledgeIndex, readKnowledgeKeywords, searchKnowledge, type KnowledgeIndex } from "./knowledgeStore.js";
+import { defaultRuntimeSwitches, loadRuntimeSwitches, type RuntimeSwitches } from "./runtimeSwitches.js";
 import { createSmartReplyGenerator, extractMessageText, type SmartReplyConversationMessage, type SmartReplyGenerator } from "./smartReply.js";
 import { LarkUserClient } from "./userTokenClient.js";
 
@@ -303,10 +304,13 @@ const knowledgeIndexFile = getKnowledgeIndexFile(rootDir);
 const knowledgeReloadMs = readPositiveInteger(process.env.LARK_KNOWLEDGE_RELOAD_MS, 60_000);
 const knowledgeSearchLimit = readPositiveInteger(process.env.LARK_KNOWLEDGE_SEARCH_LIMIT, 6);
 const knowledgeKeywords = readKnowledgeKeywords();
+const runtimeSwitchesReloadMs = readPositiveInteger(process.env.LARK_AUTOREPLY_SWITCHES_RELOAD_MS, 1_000);
 
 const skippedTargetNames: string[] = [];
 let cachedKnowledgeIndex: KnowledgeIndex | undefined;
 let cachedKnowledgeLoadedAt = 0;
+let cachedRuntimeSwitches: RuntimeSwitches | undefined;
+let cachedRuntimeSwitchesLoadedAt = 0;
 
 let running = true;
 process.once("SIGINT", () => {
@@ -382,9 +386,10 @@ async function main(): Promise<void> {
 
   while (running) {
     try {
-      const priorityResult = await pollTargets(client, botClient, state, priorityTargets, selfOpenId, smartReply, activePriorityPollConcurrency, minimumMessageTime);
+      const runtimeSwitches = await getRuntimeSwitches();
+      const priorityResult = await pollTargets(client, botClient, state, priorityTargets, selfOpenId, smartReply, activePriorityPollConcurrency, minimumMessageTime, runtimeSwitches);
       const shouldFullScan = fullScanTargets.length > 0 && Date.now() >= nextFullScanAt;
-      const fullScanResult = shouldFullScan ? await pollTargets(client, botClient, state, fullScanTargets, selfOpenId, smartReply, activeFullPollConcurrency, minimumMessageTime) : emptyPollTargetsResult();
+      const fullScanResult = shouldFullScan ? await pollTargets(client, botClient, state, fullScanTargets, selfOpenId, smartReply, activeFullPollConcurrency, minimumMessageTime, runtimeSwitches) : emptyPollTargetsResult();
       if (shouldFullScan) {
         nextFullScanAt = Date.now() + fullPollIntervalMs;
       }
@@ -431,7 +436,8 @@ async function pollTargets(
   selfOpenId: string | undefined,
   smartReply: SmartReplyGenerator | undefined,
   concurrency: number,
-  minimumMessageTime: number
+  minimumMessageTime: number,
+  runtimeSwitches: RuntimeSwitches
 ): Promise<PollTargetsResult> {
   const result = emptyPollTargetsResult();
   if (targets.length === 0) {
@@ -451,7 +457,7 @@ async function pollTargets(
         }
 
         try {
-          await pollOnce(client, botClient, state, target, selfOpenId, smartReply, minimumMessageTime);
+          await pollOnce(client, botClient, state, target, selfOpenId, smartReply, minimumMessageTime, runtimeSwitches);
           result.polled += 1;
         } catch (error) {
           if (isRateLimitError(error)) {
@@ -472,7 +478,35 @@ function emptyPollTargetsResult(): PollTargetsResult {
   return { polled: 0, failures: 0, rateLimited: 0 };
 }
 
-async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: AutoReplyState, target: ResolvedTarget, selfOpenId: string | undefined, smartReply: SmartReplyGenerator | undefined, minimumMessageTime: number): Promise<void> {
+async function getRuntimeSwitches(): Promise<RuntimeSwitches> {
+  const now = Date.now();
+  if (cachedRuntimeSwitches && now - cachedRuntimeSwitchesLoadedAt < runtimeSwitchesReloadMs) {
+    return cachedRuntimeSwitches;
+  }
+  try {
+    cachedRuntimeSwitches = await loadRuntimeSwitches();
+    cachedRuntimeSwitchesLoadedAt = now;
+  } catch (error) {
+    console.warn(`Could not load runtime switches; using previous settings. ${error instanceof Error ? error.message : String(error)}`);
+    cachedRuntimeSwitches ??= { ...defaultRuntimeSwitches };
+  }
+  return cachedRuntimeSwitches;
+}
+
+function getDisabledReplyReason(target: ResolvedTarget, useSmartReply: boolean, switches: RuntimeSwitches): string | undefined {
+  if (isChatTarget(target) && !useSmartReply && !switches.groupFixedReplyEnabled) {
+    return "group fixed replies are off";
+  }
+  if (!isChatTarget(target) && useSmartReply && !switches.directSmartReplyEnabled) {
+    return "direct AI replies are off";
+  }
+  if (!isChatTarget(target) && !useSmartReply && !switches.directFixedReplyEnabled) {
+    return "direct fixed replies are off";
+  }
+  return undefined;
+}
+
+async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: AutoReplyState, target: ResolvedTarget, selfOpenId: string | undefined, smartReply: SmartReplyGenerator | undefined, minimumMessageTime: number, runtimeSwitches: RuntimeSwitches): Promise<void> {
   const endTime = Math.floor(Date.now() / 1000);
   const targetState = state.targets?.[target.key] ?? {};
   const checkpointStartTime = targetState.lastCheckedAt === undefined ? endTime : Math.max(0, Math.min(targetState.lastCheckedAt, endTime - pollOverlapSeconds));
@@ -501,6 +535,13 @@ async function pollOnce(client: LarkUserClient, botClient: LarkClient, state: Au
     }
 
     const useSmartReply = smartReply !== undefined && shouldUseSmartReply(target);
+    const disabledReason = getDisabledReplyReason(target, useSmartReply, runtimeSwitches);
+    if (disabledReason) {
+      state.repliedMessageIds = [...(state.repliedMessageIds ?? []), messageId].slice(-200);
+      console.log(`Skipped ${target.name} message ${messageId}; ${disabledReason}.`);
+      continue;
+    }
+
     const replyGuardStartedAt = Date.now();
     if (!useSmartReply && isFixedReplySuppressedNow()) {
       state.repliedMessageIds = [...(state.repliedMessageIds ?? []), messageId].slice(-200);

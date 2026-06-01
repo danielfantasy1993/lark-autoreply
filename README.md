@@ -25,9 +25,13 @@ LARK_CONTROL_PANEL_SESSION_SECRET=replace-with-a-long-random-secret
 LARK_CONTROL_PANEL_PM2_APP=lark-autoreply
 LARK_CONTROL_PANEL_SESSION_SECONDS=43200
 LARK_CONTROL_PANEL_REMEMBER_SECONDS=2592000
+LARK_AUTOREPLY_SWITCHES_FILE=.lark-auto-reply-switches.json
+LARK_AUTOREPLY_SWITCHES_RELOAD_MS=1000
 ```
 
 登录页默认勾选“记住登录”，会保存 30 天签名登录状态；取消勾选时默认 12 小时后需要重新登录。可以通过 `LARK_CONTROL_PANEL_REMEMBER_SECONDS` 和 `LARK_CONTROL_PANEL_SESSION_SECONDS` 调整时长。
+
+控制台还提供三个运行时开关：群聊固定回复、单聊固定回复、单聊 AI 回复。开关状态保存在 `LARK_AUTOREPLY_SWITCHES_FILE` 指定的文件里，自动回复进程默认每秒读取一次；关闭某类回复期间收到的对应消息会被跳过并记为已处理，重新打开后不会补发旧消息。
 
 本地或服务器启动：
 

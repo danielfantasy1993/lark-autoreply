@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadRuntimeSwitches, saveRuntimeSwitches, type RuntimeSwitches } from "./runtimeSwitches.js";
 
 loadDotEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") });
 
@@ -49,6 +50,29 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return;
     }
     sendJson(response, 200, { app: managedProcessName, status: await getPm2Status(), checkedAt: new Date().toISOString() });
+    return;
+  }
+
+  if (url.pathname === "/api/switches") {
+    if (!isAuthenticated(request)) {
+      sendJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+    if (request.method === "GET") {
+      sendJson(response, 200, { switches: await loadRuntimeSwitches() });
+      return;
+    }
+    if (request.method === "POST") {
+      const fields = parseForm(await readRequestBody(request));
+      const switches = await saveRuntimeSwitches({
+        groupFixedReplyEnabled: isTruthy(fields.groupFixedReplyEnabled),
+        directFixedReplyEnabled: isTruthy(fields.directFixedReplyEnabled),
+        directSmartReplyEnabled: isTruthy(fields.directSmartReplyEnabled)
+      });
+      sendJson(response, 200, { switches });
+      return;
+    }
+    sendJson(response, 405, { error: "method not allowed" });
     return;
   }
 
@@ -115,10 +139,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
-  sendHtml(response, 200, renderPage({ authenticated: true, status: await getPm2Status(), message: url.searchParams.get("message") || undefined, error: url.searchParams.get("error") || undefined }));
+  sendHtml(response, 200, renderPage({ authenticated: true, status: await getPm2Status(), switches: await loadRuntimeSwitches(), message: url.searchParams.get("message") || undefined, error: url.searchParams.get("error") || undefined }));
 }
 
-function renderPage(options: { authenticated: boolean; status?: Pm2Status; message?: string; error?: string }): string {
+function renderPage(options: { authenticated: boolean; status?: Pm2Status; switches?: RuntimeSwitches; message?: string; error?: string }): string {
   const status = options.status;
   return `<!doctype html>
 <html lang="zh-CN">
@@ -146,6 +170,16 @@ function renderPage(options: { authenticated: boolean; status?: Pm2Status; messa
     .refresh { color:var(--ink); background:#eef2f6; border:1px solid var(--line); }
     .status { margin:18px 0 0; padding:14px; border-radius:10px; background:#f8fafc; border:1px solid var(--line); }
     .status-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .switches { margin:16px 0 0; display:grid; gap:10px; }
+    .switch-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+    .switch-title { font-weight:750; }
+    .switch-sub { margin:3px 0 0; color:var(--muted); font-size:12px; line-height:1.45; }
+    .toggle { position:relative; display:inline-flex; width:50px; height:28px; flex:0 0 auto; }
+    .toggle input { position:absolute; opacity:0; width:1px; height:1px; }
+    .slider { position:absolute; inset:0; cursor:pointer; border-radius:999px; background:#d0d5dd; transition:.18s ease; }
+    .slider::before { content:""; position:absolute; width:22px; height:22px; left:3px; top:3px; border-radius:50%; background:#fff; box-shadow:0 2px 5px rgba(16,24,40,.2); transition:.18s ease; }
+    .toggle input:checked + .slider { background:var(--blue); }
+    .toggle input:checked + .slider::before { transform:translateX(22px); }
     .pill { display:inline-flex; padding:4px 9px; border-radius:999px; font-size:13px; font-weight:750; background:#eef4ff; color:#3538cd; }
     .online { background:#ecfdf3; color:#067647; }
     .stopped { background:#fff1f3; color:#c01048; }
@@ -160,7 +194,7 @@ function renderPage(options: { authenticated: boolean; status?: Pm2Status; messa
 </head>
 <body>
   <main class="card">
-    ${options.authenticated ? renderControlContent(status, options.message, options.error) : renderLoginContent(options.error)}
+    ${options.authenticated ? renderControlContent(status, options.switches, options.message, options.error) : renderLoginContent(options.error)}
   </main>
   ${options.authenticated ? renderStatusScript() : ""}
 </body>
@@ -182,9 +216,10 @@ function renderLoginContent(error?: string): string {
     </form>`;
 }
 
-function renderControlContent(status: Pm2Status | undefined, message?: string, error?: string): string {
+function renderControlContent(status: Pm2Status | undefined, switches: RuntimeSwitches | undefined, message?: string, error?: string): string {
   const statusText = status?.status || "unknown";
   const statusClass = statusText === "online" ? "online" : statusText === "stopped" ? "stopped" : "";
+  const currentSwitches = switches ?? { groupFixedReplyEnabled: true, directFixedReplyEnabled: true, directSmartReplyEnabled: true };
   return `<div class="top"><div><h1>自动回复控制台</h1><p>${escapeHtml(managedProcessName)}</p></div><a class="logout" href="/logout">退出</a></div>
     ${message && !error ? `<div class="alert ok">${escapeHtml(message)}</div>` : ""}
     ${error ? `<div class="alert err">${escapeHtml(error)}</div>` : ""}
@@ -200,7 +235,19 @@ function renderControlContent(status: Pm2Status | undefined, message?: string, e
       <button class="start" name="action" value="start" type="submit">启动</button>
       <button class="stop" name="action" value="stop" type="submit">停止</button>
       <button class="restart" name="action" value="restart" type="submit">重启</button>
+    </form>
+    <form class="switches" id="reply-switches">
+      ${renderSwitch("groupFixedReplyEnabled", "群聊固定回复", "群聊里 @ 你时发送固定文案", currentSwitches.groupFixedReplyEnabled)}
+      ${renderSwitch("directFixedReplyEnabled", "单聊固定回复", "单聊目标使用固定文案回复", currentSwitches.directFixedReplyEnabled)}
+      ${renderSwitch("directSmartReplyEnabled", "单聊 AI 回复", "单聊智能目标使用 AI 生成回复", currentSwitches.directSmartReplyEnabled)}
     </form>`;
+}
+
+function renderSwitch(name: keyof RuntimeSwitches, title: string, subtitle: string, checked: boolean): string {
+  return `<div class="switch-row">
+      <div><div class="switch-title">${escapeHtml(title)}</div><p class="switch-sub">${escapeHtml(subtitle)}</p></div>
+      <label class="toggle" title="${escapeHtml(title)}"><input name="${escapeHtml(name)}" type="checkbox" ${checked ? "checked" : ""}><span class="slider"></span></label>
+    </div>`;
 }
 
 function renderStatusScript(): string {
@@ -210,6 +257,7 @@ function renderStatusScript(): string {
     const statusRestarts = document.getElementById('status-restarts');
     const statusCheckedAt = document.getElementById('status-checked-at');
     const refreshButton = document.getElementById('refresh-status');
+    const switchForm = document.getElementById('reply-switches');
 
     function setStatus(payload) {
       const status = payload && payload.status ? payload.status : { status: 'unknown' };
@@ -235,6 +283,14 @@ function renderStatusScript(): string {
     }
 
     refreshButton.addEventListener('click', refreshStatus);
+    switchForm.addEventListener('change', async () => {
+      const formData = new FormData(switchForm);
+      const body = new URLSearchParams();
+      for (const name of ['groupFixedReplyEnabled', 'directFixedReplyEnabled', 'directSmartReplyEnabled']) {
+        body.set(name, formData.has(name) ? 'true' : 'false');
+      }
+      await fetch('/api/switches', { method: 'POST', body, cache: 'no-store' });
+    });
     refreshStatus();
     setInterval(refreshStatus, 2000);
   </script>`;
