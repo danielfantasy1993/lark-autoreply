@@ -128,7 +128,7 @@ LARK_AUTOREPLY_SELF_REPLY_CHECK_DELAY_MS=2000
 
 默认情况下，自动回复会优先用飞书“回复某条消息”的形式挂到触发它的那条消息下面；如果该接口在某些外部联系人或权限场景失败，会自动回退为普通发消息。需要强制使用普通发消息时，可以设置 `LARK_AUTOREPLY_REPLY_TO_SOURCE_MESSAGE_ENABLED=false`。
 
-所有自动发送的固定回复、AI 回复和工具跟进回复都会默认在结尾加上 ` ar` 标记，用来和用户真人回复区分。这个标记也会被智能上下文和风格学习脚本识别并跳过，避免把自动回复当成真人样本学习。如果确实要改标记，可以设置 `LARK_AUTOREPLY_MARKER`，例如 `ᵃʳ`。历史 `AR:` 前缀仍会被识别为自动回复，避免污染训练样本。
+所有自动发送的固定回复、AI 回复和工具跟进回复都会默认在结尾加上 `ᵃʳ` 标记，用来和用户真人回复区分。这个标记也会被智能上下文和风格学习脚本识别并跳过，避免把自动回复当成真人样本学习。如果确实要改标记，可以设置 `LARK_AUTOREPLY_MARKER`。历史 `ar` 后缀和 `AR:` 前缀仍会被识别为自动回复，避免污染训练样本。
 
 风格学习和自评可以用 `npm run smart:learn`、`npm run smart:self-review`。自评脚本会读取学习样本或手工评测样本，生成候选回复，再用规则和 AI 评审打分，报告保存在 `.training/smart-reply-self-review.md` 和 `.training/smart-reply-self-review.json`。
 

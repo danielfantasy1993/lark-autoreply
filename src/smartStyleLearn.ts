@@ -321,14 +321,14 @@ function isUsableText(text: string): boolean {
 
 function isMarkedAutoReplyText(text: string): boolean {
   const trimmedText = text.trim();
-  return Boolean((autoReplyMarker && trimmedText.endsWith(` ${autoReplyMarker}`)) || trimmedText.startsWith("AR:"));
+  return Boolean((autoReplyMarker && trimmedText.endsWith(` ${autoReplyMarker}`)) || trimmedText.endsWith(" ar") || trimmedText.startsWith("AR:"));
 }
 
 function readAutoReplyMarker(): string {
   const configuredMarker = process.env.LARK_AUTOREPLY_MARKER ?? process.env.LARK_AUTOREPLY_PREFIX;
   const marker = configuredMarker?.trim();
   if (!marker || marker === "AR:") {
-    return "ar";
+    return "ᵃʳ";
   }
   return marker;
 }

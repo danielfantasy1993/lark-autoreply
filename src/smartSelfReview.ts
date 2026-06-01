@@ -216,14 +216,14 @@ function analyzeReply(reply: string, reviewCase: ReviewCase): string[] {
 function isMarkedAutoReplyText(text: string): boolean {
   const marker = readAutoReplyMarker();
   const trimmedText = text.trim();
-  return Boolean((marker && trimmedText.endsWith(` ${marker}`)) || trimmedText.startsWith("AR:"));
+  return Boolean((marker && trimmedText.endsWith(` ${marker}`)) || trimmedText.endsWith(" ar") || trimmedText.startsWith("AR:"));
 }
 
 function readAutoReplyMarker(): string {
   const configuredMarker = process.env.LARK_AUTOREPLY_MARKER ?? process.env.LARK_AUTOREPLY_PREFIX;
   const marker = configuredMarker?.trim();
   if (!marker || marker === "AR:") {
-    return "ar";
+    return "ᵃʳ";
   }
   return marker;
 }
